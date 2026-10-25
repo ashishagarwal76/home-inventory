@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Inventory – New Item</title>
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0; padding: 16px; background: #f3f7f9;
+      color: #183440; font-family: system-ui, sans-serif;
+    }
+    main {
+      max-width: 520px; margin: 8px auto; padding: 24px;
+      background: white; border: 1px solid #dbe5ea; border-radius: 14px;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .help { color: #536873; font-size: 14px; line-height: 1.5; }
+    fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+    label { display: block; margin: 18px 0 6px; font-weight: 600; }
+    input, textarea, button {
+      width: 100%; border-radius: 8px; padding: 12px;
+      font: inherit; font-size: 16px;
+    }
+    input, textarea { border: 1px solid #b7c9d1; background: white; }
+    textarea { resize: vertical; }
+    input:focus, textarea:focus {
+      outline: 2px solid #26718d; outline-offset: 2px;
+    }
+    input:disabled, textarea:disabled { background: #f0f4f6; }
+    button {
+      border: 0; margin-top: 20px; min-height: 48px;
+      background: #165d78; color: white; font-weight: 600; cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    #result {
+      margin: 18px 0 0; padding: 12px; border-radius: 8px;
+      white-space: pre-line; overflow-wrap: anywhere; line-height: 1.5;
+    }
+    .info { background: #edf4f7; color: #274957; }
+    .success { background: #e8f5ec; color: #185b32; }
+    .error { background: #fff0ef; color: #92372f; }
+    select {
+      width: 100%; border-radius: 8px; padding: 12px;
+      font: inherit; font-size: 16px;
+      border: 1px solid #b7c9d1; background: white;
+    }
+    select:focus { outline: 2px solid #26718d; outline-offset: 2px; }
+    select:disabled { background: #f0f4f6; }
+
+    #photoFields { margin-top: 24px; }
+    #photoFields legend { font-weight: 600; margin-bottom: 10px; padding: 0; }
+    .photoButtons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .photoButtons button { margin-top: 0; }
+    .secondary { background: #edf4f7; color: #165d78; border: 1px solid #b7c9d1; }
+    #cropCanvas {
+      display: block; width: 100%; max-width: 360px; aspect-ratio: 1;
+      margin: 14px auto; border-radius: 8px; background: #e8eef1;
+      touch-action: none; cursor: grab;
+    }
+    #cropZoom { padding: 0; border: 0; min-height: 38px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>New Item</h1>
+  <p class="help">Create an item and optionally record its initial stock and placement.</p>
+
+  <form id="newItemForm">
+    <fieldset id="fields">
+      <label for="itemName">Item name</label>
+      <input id="itemName" type="text" required autocomplete="off">
+
+      <label for="category">Category (optional)</label>
+      <input id="category" type="text" autocomplete="off">
+
+      <label for="unit">Unit</label>
+      <select id="unit" required>
+        <option value="">Select a unit</option>
+        <option value="Each">Each</option>
+        <option value="Pack">Pack</option>
+        <option value="Meter">Meter</option>
+        <option value="Gram">Gram</option>
+        <option value="Kilogram">Kilogram</option>
+        <option value="Litre">Litre</option>
+      </select>
+
+      <label for="minimumStock">Minimum stock</label>
+      <input id="minimumStock" type="number" min="0" step="any"
+             value="0" required aria-describedby="minimumHelp">
+      <p id="minimumHelp" class="help">Use 0 if you do not need a minimum.</p>
+
+      <label for="initialQuantity">Initial quantity (optional)</label>
+      <input id="initialQuantity" type="number" min="1" step="1" placeholder="Leave blank for no initial stock" aria-describedby="initialStockHelp">
+      <label for="initialStorageID">Initial placement (optional)</label>
+      <select id="initialStorageID"><option value="">Choose a placement (optional)</option></select>
+      <p id="initialStockHelp" class="help">To add stock now, enter a positive quantity and choose its placement. Leave both blank to create the item without stock.</p>
+
+      <label for="notes">Notes (optional)</label>
+      <textarea id="notes" rows="3"></textarea>
+    </fieldset>
+    <button id="refreshPlacements" type="button" class="secondary">Refresh placements</button>
+    <fieldset id="photoFields">
+      <legend>Photo (optional)</legend>
+      <div class="photoButtons">
+        <button id="cameraButton" type="button" class="secondary">Take a photo</button>
+        <button id="galleryButton" type="button" class="secondary">Choose a photo</button>
+      </div>
+      <input id="camera" type="file" accept="image/*" capture="environment" hidden>
+      <input id="gallery" type="file" accept="image/*" hidden>
+      <div id="cropArea" hidden>
+        <p class="help">Drag the photo to position it, then adjust Zoom.</p>
+        <canvas id="cropCanvas" width="600" height="600"
+                aria-label="Photo crop preview"></canvas>
+        <label for="cropZoom">Zoom</label>
+        <input id="cropZoom" type="range" min="1" max="4" step="0.01" value="1">
+        <button id="removePhoto" type="button" class="secondary">Remove photo</button>
+      </div>
+    </fieldset>
+    <button id="finishWithoutPhoto" type="button" class="secondary" hidden>
+      Finish without photo
+    </button>
+
+    <button id="saveButton" type="submit">Create item</button>
+    <button id="nextButton" type="button" hidden>Create another item</button>
+  </form>
+
+  <p id="result" class="info" role="status" aria-live="polite"></p>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const storageKey = "homeInventory.pendingNewItem.v1";
+  const baseFieldIDs = ["itemName", "category", "unit", "minimumStock", "notes"];
+  const openingFieldIDs = ["initialQuantity", "initialStorageID"];
+  const fieldIDs = baseFieldIDs.concat(openingFieldIDs);
+  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const itemPattern = new RegExp("^NEWITEM-" + uuid + "$", "i");
+  const photoPattern = new RegExp("^PHOTO-" + uuid + "$", "i");
+  const canvas = $("cropCanvas");
+  const context = canvas.getContext("2d");
+
+  let pending = null;
+  let busy = false;
+  let completed = false;
+  let blocked = false;
+  let operationVersion = 0;
+  let cropImage = null;
+  let baseScale = 1;
+  let zoom = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+  let drag = null;
+  let placementsReady = false, placementsLoading = false, placementsVersion = 0;
+
+  function show(message, type = "info") {
+    $("result").textContent = message;
+    $("result").className = type;
+  }
+
+  function photoEditable() {
+    return !blocked && !busy && !completed &&
+      (!pending || pending.photoRejected);
+  }
+
+  function updateControls() {
+    $("fields").disabled = blocked || busy || Boolean(pending) || completed;
+    $("photoFields").disabled = !photoEditable();
+    $("cropZoom").disabled = !photoEditable() || !cropImage;
+    $("removePhoto").disabled = !photoEditable() || !cropImage;
+    $("saveButton").hidden = completed;
+    $("nextButton").hidden = !completed;
+    $("finishWithoutPhoto").hidden = !(pending && pending.photoRejected);
+    $("finishWithoutPhoto").disabled = blocked || busy;
+    $("saveButton").disabled = blocked || busy || completed ||
+      Boolean(pending && pending.photoRejected && !cropImage);
+    $("refreshPlacements").disabled = blocked || busy || completed || Boolean(pending) || placementsLoading;
+    $("initialStorageID").disabled = !placementsReady;
+    canvas.style.cursor = photoEditable() && cropImage ? "grab" : "default";
+
+    $("saveButton").textContent = busy ? "Saving…" :
+      !pending ? (cropImage ? "Create item and save photo" : "Create item") :
+      !pending.itemID ? "Retry item creation" :
+      pending.finished || !pending.photoRequest || pending.photoDone ? "Finish" :
+      pending.photoRejected ? "Save photo" : "Retry photo upload";
+  }
+
+  function writePending(candidate) {
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(candidate));
+      return true;
+    } catch (error) {
+      busy = false;
+      updateControls();
+      show(
+        (candidate.itemID ? "Item created: " + candidate.itemName + "\n\n" :
+          !pending ? "Nothing was sent.\n\n" : "") +
+        "Could not save the request for retry. Allow browser storage, " +
+        "then try again.\n" + error.message,
+        "error"
+      );
+      return false;
+    }
+  }
+
+  function finishSuccess() {
+    const saved = pending;
+    saved.finished = true;
+    busy = false;
+    const message = "Item created: " + saved.itemName +
+      (saved.initialStockMessage ? "\n" + saved.initialStockMessage : "") +
+      (saved.photoDone ? "\nPhoto saved." : "\nNo photo added.") +
+      "\n\nReference: " + saved.requestID;
+
+    try {
+      sessionStorage.removeItem(storageKey);
+    } catch (error) {
+      // Retain the confirmed result if clearing storage is temporarily blocked.
+      try { sessionStorage.setItem(storageKey, JSON.stringify(saved)); } catch (_) {}
+      updateControls();
+      show(message + "\n\nAllow browser storage, then tap Finish " +
+        "to clear this saved request before creating another item.", "success");
+      return;
+    }
+
+    pending = null;
+    completed = true;
+    updateControls();
+    show(message, "success");
+  }
+
+  function callServer(method, payload, handler, message) {
+    const version = ++operationVersion;
+    busy = true;
+    drag = null;
+    updateControls();
+    show(message);
+
+    function failed(error) {
+      if (version !== operationVersion || !pending) return;
+      busy = false;
+      updateControls();
+      show(
+        (pending.itemID ? "Item created: " + pending.itemName + "\n\n" : "") +
+        (method === "uploadInventoryPhoto" ? "The photo result" : "The item creation result") +
+        " could not be confirmed. Use the retry button to check or finish " +
+        "this same request.\n\nReference: " + payload.requestID +
+        "\n" + (error && error.message ? error.message : String(error)),
+        "error"
+      );
+    }
+
+    try {
+      const runner = google.script.run
+        .withSuccessHandler(result => {
+          if (version !== operationVersion || !pending) return;
+          try { handler(result); } catch (error) { failed(error); }
+        })
+        .withFailureHandler(failed);
+      runner[method](payload);
+    } catch (error) {
+      failed(error);
+    }
+  }
+
+  function sendPending() {
+    if (pending.itemID) {
+      if (pending.finished || !pending.photoRequest || pending.photoDone) {
+        finishSuccess();
+        return;
+      }
+      if (!writePending(pending)) return;
+
+      callServer("uploadInventoryPhoto", pending.photoRequest, result => {
+        if (!result || typeof result.accepted !== "boolean" ||
+            typeof result.message !== "string" ||
+            (result.requestID && result.requestID !== pending.photoRequest.requestID)) {
+          throw new Error("Unexpected photo upload response.");
+        }
+
+        busy = false;
+        if (result.accepted) {
+          pending.photoDone = true;
+          finishSuccess();
+          return;
+        }
+
+        pending.photoRejected = true;
+        try { sessionStorage.setItem(storageKey, JSON.stringify(pending)); } catch (_) {}
+        updateControls();
+        show("Item created: " + pending.itemName + "\n\nPhoto not saved: " +
+          result.message + "\nChoose another photo and tap Save photo, " +
+          "or tap Finish without photo.", "error");
+      }, "Item created: " + pending.itemName + "\nSaving cropped photo…");
+      return;
+    }
+
+    if (!writePending(pending)) return;
+    const itemRequest = { requestID: pending.requestID };
+    fieldIDs.forEach(id => { itemRequest[id] = pending[id]; });
+
+    callServer("submitWebNewItem", itemRequest, result => {
+      if (!result || typeof result.accepted !== "boolean" ||
+          result.requestID !== pending.requestID ||
+          typeof result.message !== "string" ||
+          typeof result.itemID !== "string" ||
+          (result.accepted && !/^ITEM-\d+$/.test(result.itemID))) {
+        throw new Error("Unexpected item creation response.");
+      }
+      if (result.accepted && pending.initialQuantity && result.initialStockRecorded !== true) {
+        throw new Error("The initial stock result is not confirmed. Retry this same item request.");
+      }
+
+      busy = false;
+      if (!result.accepted) {
+        try {
+          sessionStorage.removeItem(storageKey);
+        } catch (error) {
+          updateControls();
+          show("Rejected: " + result.message +
+            "\n\nAllow browser storage, then retry this same item request.", "error");
+          return;
+        }
+        pending = null;
+        updateControls();
+        show("Rejected: " + result.message, "error");
+        return;
+      }
+
+      pending.itemID = result.itemID;
+      pending.initialStockMessage = typeof result.initialStockMessage === "string" ? result.initialStockMessage : "";
+      if (pending.photoRequest) pending.photoRequest.recordID = result.itemID;
+      // Save the new ItemID before sending the separately tracked photo request.
+      sendPending();
+    }, "Creating item…");
+  }
+
+  function drawCrop() {
+    if (!cropImage) return;
+    const scale = baseScale * zoom;
+    const width = cropImage.naturalWidth * scale;
+    const height = cropImage.naturalHeight * scale;
+    const limitX = Math.max(0, (width - canvas.width) / 2);
+    const limitY = Math.max(0, (height - canvas.height) / 2);
+    offsetX = Math.max(-limitX, Math.min(limitX, offsetX));
+    offsetY = Math.max(-limitY, Math.min(limitY, offsetY));
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(cropImage,
+      (canvas.width - width) / 2 + offsetX,
+      (canvas.height - height) / 2 + offsetY, width, height);
+  }
+
+  async function loadCropImage(url) {
+    const image = new Image();
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error("Try a JPEG or PNG photo."));
+      image.src = url;
+    });
+    if (!image.naturalWidth || !image.naturalHeight) {
+      throw new Error("The photo could not be opened.");
+    }
+    cropImage = image;
+    baseScale = Math.max(canvas.width / image.naturalWidth,
+      canvas.height / image.naturalHeight);
+    zoom = 1;
+    offsetX = 0;
+    offsetY = 0;
+    $("cropZoom").value = "1";
+    $("cropArea").hidden = false;
+    drawCrop();
+  }
+
+  function resetCrop() {
+    cropImage = null;
+    drag = null;
+    $("cropArea").hidden = true;
+  }
+
+  async function preparePhoto(file) {
+    if (!file || !photoEditable()) return;
+    busy = true;
+    resetCrop();
+    updateControls();
+    show("Preparing photo…");
+    let objectURL;
+    try {
+      if (file.size > 30 * 1024 * 1024) {
+        throw new Error("Choose a photo smaller than 30 MB.");
+      }
+      objectURL = URL.createObjectURL(file);
+      await loadCropImage(objectURL);
+      show((pending && pending.itemID ? "Item created: " + pending.itemName + "\n" : "") +
+        "Drag the photo and adjust Zoom. Only the square shown will be saved.");
+    } catch (error) {
+      show(error.message, "error");
+    } finally {
+      if (objectURL) URL.revokeObjectURL(objectURL);
+      busy = false;
+      updateControls();
+    }
+  }
+
+  function photoRequest(itemID) {
+    if (!cropImage) throw new Error("Choose a photo first.");
+    drawCrop();
+    const dataURL = canvas.toDataURL("image/jpeg", 0.85);
+    if (!dataURL.startsWith("data:image/jpeg;base64,") || dataURL.length > 1300000) {
+      throw new Error("The cropped photo is too large to upload.");
+    }
+    return {
+      requestID: "PHOTO-" + crypto.randomUUID(),
+      recordType: "Item",
+      recordID: itemID || "",
+      base64: dataURL.split(",")[1]
+    };
+  }
+
+  $("newItemForm").addEventListener("submit", event => {
+    event.preventDefault();
+    if (blocked || busy || completed) return;
+    try {
+      let candidate = pending;
+      if (!pending) {
+        $("itemName").value = $("itemName").value.trim();
+        if (!$("newItemForm").reportValidity() || !openingStockValid()) return;
+        candidate = {
+          requestID: "NEWITEM-" + crypto.randomUUID(),
+          itemID: "", photoRequest: cropImage ? photoRequest("") : null,
+          photoRejected: false, photoDone: false, finished: false
+        };
+        fieldIDs.forEach(id => { candidate[id] = $(id).value.trim(); });
+      } else if (pending.photoRejected) {
+        candidate = { ...pending, photoRequest: photoRequest(pending.itemID),
+          photoRejected: false, photoDone: false, finished: false };
+      }
+      if (!writePending(candidate)) return;
+      pending = candidate;
+      sendPending();
+    } catch (error) {
+      show((pending && pending.itemID ? "Item created: " + pending.itemName + "\n\n" : "") +
+        "This attempt was not sent. " + error.message, "error");
+    }
+  });
+
+  ["camera", "gallery"].forEach(id => {
+    $(id + "Button").addEventListener("click", () => {
+      if (photoEditable()) $(id).click();
+    });
+    $(id).addEventListener("change", event => {
+      const file = event.target.files[0];
+      event.target.value = "";
+      preparePhoto(file);
+    });
+  });
+
+  $("removePhoto").addEventListener("click", () => {
+    if (!photoEditable()) return;
+    resetCrop();
+    updateControls();
+    show(pending ? "Item created: " + pending.itemName +
+      "\nChoose another photo, or tap Finish without photo." :
+      "Photo removed. You can create this item without a photo.");
+  });
+
+  $("cropZoom").addEventListener("input", () => {
+    if (!photoEditable() || !cropImage) return;
+    const nextZoom = Number($("cropZoom").value);
+    const ratio = nextZoom / zoom;
+    offsetX *= ratio;
+    offsetY *= ratio;
+    zoom = nextZoom;
+    drawCrop();
+  });
+
+  canvas.addEventListener("pointerdown", event => {
+    if (!photoEditable() || !cropImage || drag) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    canvas.setPointerCapture(event.pointerId);
+    drag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    canvas.style.cursor = "grabbing";
+  });
+  canvas.addEventListener("pointermove", event => {
+    if (!drag || drag.id !== event.pointerId || !photoEditable()) return;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    event.preventDefault();
+    offsetX += (event.clientX - drag.x) * canvas.width / rect.width;
+    offsetY += (event.clientY - drag.y) * canvas.height / rect.height;
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    drawCrop();
+  });
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach(type => {
+    canvas.addEventListener(type, event => {
+      if (!drag || drag.id !== event.pointerId) return;
+      drag = null;
+      updateControls();
+    });
+  });
+
+  $("finishWithoutPhoto").addEventListener("click", () => {
+    if (!pending || !pending.photoRejected || busy || blocked) return;
+    const candidate = { ...pending, photoRequest: null,
+      photoRejected: false, photoDone: false, finished: false };
+    if (!writePending(candidate)) return;
+    pending = candidate;
+    resetCrop();
+    finishSuccess();
+  });
+
+  $("nextButton").addEventListener("click", () => {
+    if (!completed || busy || blocked || pending) return;
+    operationVersion++;
+    $("newItemForm").reset();
+    completed = false;
+    resetCrop();
+    updateControls();
+    show("Enter the details of the new item. A photo is optional.");
+    $("itemName").focus();
+    updateOpeningUnit();
+    loadPlacementChoices();
+  });
+
+  function readSavedRequest(value) {
+    if (!value || typeof value !== "object" ||
+        !itemPattern.test(value.requestID) ||
+        !baseFieldIDs.every(id => typeof value[id] === "string") ||
+        !openingFieldIDs.every(id => value[id] == null || typeof value[id] === "string")) {
+      throw new Error("The saved item request is incomplete.");
+    }
+    const saved = { requestID: value.requestID, itemID: value.itemID || "" };
+    fieldIDs.forEach(id => { saved[id] = value[id] == null ? "" : value[id]; });
+    saved.initialStockMessage = typeof value.initialStockMessage === "string" ? value.initialStockMessage : "";
+    if (typeof saved.itemID !== "string" ||
+        (saved.itemID && !/^ITEM-\d+$/.test(saved.itemID))) {
+      throw new Error("The saved ItemID is invalid.");
+    }
+    ["photoRejected", "photoDone", "finished"].forEach(key => {
+      if (value[key] !== undefined && typeof value[key] !== "boolean") {
+        throw new Error("The saved request status is invalid.");
+      }
+      saved[key] = value[key] === true;
+    });
+    saved.photoRequest = value.photoRequest || null;
+    const photo = saved.photoRequest;
+    if (photo && (!photoPattern.test(photo.requestID) ||
+        photo.recordType !== "Item" || photo.recordID !== saved.itemID ||
+        typeof photo.base64 !== "string" || !photo.base64 ||
+        photo.base64.length > 1300000 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(photo.base64))) {
+      throw new Error("The saved photo request is incomplete.");
+    }
+    if ((saved.photoRejected && (!photo || !saved.itemID)) ||
+        (saved.photoDone && (!photo || !saved.itemID)) ||
+        (saved.finished && (!saved.itemID || (photo && !saved.photoDone)))) {
+      throw new Error("The saved request status is inconsistent.");
+    }
+    return saved;
+  }
+
+  async function initializePage() {
+    try {
+      const saved = sessionStorage.getItem(storageKey);
+      if (saved !== null) pending = readSavedRequest(JSON.parse(saved));
+      if (pending) {
+        fieldIDs.forEach(id => {
+          const matchingUnit = id === "unit" && Array.from($(id).options).find(
+            option => option.value.toLowerCase() === pending.unit.toLowerCase()
+          );
+          $(id).value = matchingUnit ? matchingUnit.value : pending[id];
+        });
+        if (pending.photoRequest) {
+          busy = true;
+          updateControls();
+          try {
+            await loadCropImage("data:image/jpeg;base64," + pending.photoRequest.base64);
+          } catch (_) { $("cropArea").hidden = true; }
+          busy = false;
+        }
+      }
+    } catch (error) {
+      blocked = true;
+      busy = false;
+      updateControls();
+      show("Could not read the saved request. Check NewItemRequests, Items, " +
+        "and the item's PhotoURL before trying again.\n" + error.message, "error");
+      return;
+    }
+
+    updateControls();
+    show(!pending ? "Enter the details of the new item. A photo is optional." :
+      !pending.itemID ? "An earlier item request has no confirmed result.\n" +
+        "Item: " + pending.itemName + "\nTap Retry item creation to resolve it." :
+      pending.finished || !pending.photoRequest || pending.photoDone ?
+        "Item created: " + pending.itemName + "\nTap Finish to close this saved request." :
+      pending.photoRejected ? "Item created: " + pending.itemName +
+        "\nChoose another photo and tap Save photo, or tap Finish without photo." :
+        "Item created: " + pending.itemName +
+        "\nThe photo upload has no confirmed result. Tap Retry photo upload.");
+    updateOpeningUnit();
+    loadPlacementChoices();
+  }
+
+  function updateOpeningUnit() {
+    const whole = ["each", "ea", "pack", "packs", "piece", "pieces", "pcs"].includes($("unit").value.toLowerCase());
+    $("initialQuantity").min = whole ? "1" : "0.001";
+    $("initialQuantity").step = whole ? "1" : "0.001";
+  }
+  function openingStockValid() {
+    const quantityText = $("initialQuantity").value.trim(), storage = $("initialStorageID").value;
+    if (!quantityText && !storage) return true;
+    if (!quantityText || !storage) { show("For initial stock, enter both a quantity and a placement, or leave both blank.", "error"); return false; }
+    if (!placementsReady) { show("Refresh the placement choices before adding initial stock.", "error"); return false; }
+    const quantity = Number(quantityText), scaled = quantity * 1000;
+    const whole = Number($("initialQuantity").step) === 1;
+    if (!Number.isFinite(quantity) || quantity <= 0 || quantity > Number.MAX_SAFE_INTEGER ||
+        (whole && !Number.isSafeInteger(quantity)) || (!whole && (quantity < 0.001 ||
+          !Number.isSafeInteger(Math.round(scaled)) || Math.abs(scaled - Math.round(scaled)) > Number.EPSILON * Math.max(1, Math.abs(scaled)) * 16))) {
+      show(whole ? "This unit requires a whole-number initial quantity." : "Enter at least 0.001, with up to 3 decimal places.", "error"); return false;
+    }
+    return true;
+  }
+  function loadPlacementChoices() {
+    if (blocked || busy || completed || placementsLoading) return;
+    const version = ++placementsVersion;
+    placementsLoading = true; updateControls();
+    function failed(error) {
+      if (version !== placementsVersion) return;
+      placementsLoading = false; placementsReady = false; updateControls();
+      if (!pending && !busy && !completed) show("Could not load placements. You can create the item without initial stock, or tap Refresh placements.\n" + (error && error.message ? error.message : String(error)), "error");
+    }
+    try {
+      google.script.run.withSuccessHandler(value => {
+        if (version !== placementsVersion) return;
+        if (!value || !Array.isArray(value.placements) || !value.placements.every(entry => entry && typeof entry.id === "string" && typeof entry.label === "string") ||
+            new Set(value.placements.map(entry => entry.id)).size !== value.placements.length) { failed(new Error("Unexpected placement choices.")); return; }
+        const selected = pending ? pending.initialStorageID : $("initialStorageID").value;
+        $("initialStorageID").replaceChildren(new Option("Choose a placement (optional)", ""));
+        value.placements.forEach(entry => $("initialStorageID").add(new Option(entry.label, entry.id)));
+        if (pending && selected && !value.placements.some(entry => entry.id === selected)) $("initialStorageID").add(new Option("Previously selected placement", selected));
+        $("initialStorageID").value = selected;
+        placementsLoading = false; placementsReady = true; updateControls();
+      }).withFailureHandler(failed).getNewItemPlacementOptions();
+    } catch (error) { failed(error); }
+  }
+  $("unit").addEventListener("change", updateOpeningUnit);
+  $("refreshPlacements").addEventListener("click", () => { if (!pending) loadPlacementChoices(); });
+
+  initializePage();
+</script>
+</body>
+</html>

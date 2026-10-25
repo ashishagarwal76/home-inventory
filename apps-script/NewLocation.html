@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Inventory – New Location</title>
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0; padding: 16px; background: #f3f7f9;
+      color: #183440; font-family: system-ui, sans-serif;
+    }
+    main {
+      max-width: 520px; margin: 8px auto; padding: 24px;
+      background: white; border: 1px solid #dbe5ea; border-radius: 14px;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .help { color: #536873; font-size: 14px; line-height: 1.5; }
+    fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+    label { display: block; margin: 18px 0 6px; font-weight: 600; }
+    input, textarea, button {
+      width: 100%; border-radius: 8px; padding: 12px;
+      font: inherit; font-size: 16px;
+    }
+    input, textarea { border: 1px solid #b7c9d1; background: white; }
+    textarea { resize: vertical; }
+    input:focus, textarea:focus {
+      outline: 2px solid #26718d; outline-offset: 2px;
+    }
+    input:disabled, textarea:disabled { background: #f0f4f6; }
+    button {
+      border: 0; margin-top: 20px; min-height: 48px;
+      background: #165d78; color: white; font-weight: 600; cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    #result {
+      margin: 18px 0 0; padding: 12px; border-radius: 8px;
+      white-space: pre-line; overflow-wrap: anywhere; line-height: 1.5;
+    }
+    .info { background: #edf4f7; color: #274957; }
+    .success { background: #e8f5ec; color: #185b32; }
+    .error { background: #fff0ef; color: #92372f; }
+    select {
+      width: 100%; border-radius: 8px; padding: 12px;
+      font: inherit; font-size: 16px;
+      border: 1px solid #b7c9d1; background: white;
+    }
+    select:focus { outline: 2px solid #26718d; outline-offset: 2px; }
+    select:disabled { background: #f0f4f6; }
+
+  </style>
+</head>
+<body>
+<main>
+  <h1>New Location</h1>
+  <p class="help">Add a place where items and boxes are stored.</p>
+  <form id="newLocationForm">
+    <fieldset id="fields">
+      <label for="locationName">Location name</label>
+      <input id="locationName" type="text" required autocomplete="off">
+      <label for="notes">Notes (optional)</label>
+      <textarea id="notes" rows="3"></textarea>
+    </fieldset>
+    <button id="saveButton" type="submit">Create location</button>
+    <button id="nextButton" type="button" hidden>Create another location</button>
+  </form>
+  <p id="result" class="info" role="status" aria-live="polite"></p>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const storageKey = "homeInventory.pendingNewLocation.v1";
+  const requestPattern = /^NEWLOC-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  let pending = null;
+  let busy = false;
+  let completed = false;
+  let blocked = false;
+  let operationVersion = 0;
+
+  function show(message, type = "info") {
+    $("result").textContent = message;
+    $("result").className = type;
+  }
+
+  function updateControls() {
+    $("fields").disabled = blocked || busy || Boolean(pending) || completed;
+    $("saveButton").disabled = blocked || busy || completed;
+    $("saveButton").hidden = completed;
+    $("nextButton").hidden = !completed;
+    $("saveButton").textContent = busy ? "Creating location…" :
+      pending ? "Retry same request" : "Create location";
+  }
+
+  $("newLocationForm").addEventListener("submit", event => {
+    event.preventDefault();
+    if (blocked || busy || completed) return;
+    if (!pending) {
+      $("locationName").value = $("locationName").value.trim();
+      if (!$("newLocationForm").reportValidity()) return;
+      try {
+        const request = {
+          requestID: "NEWLOC-" + crypto.randomUUID(),
+          locationName: $("locationName").value,
+          notes: $("notes").value.trim()
+        };
+        sessionStorage.setItem(storageKey, JSON.stringify(request));
+        pending = request;
+      } catch (error) {
+        show("Nothing was sent. Allow browser storage so the request " +
+          "can be saved for retry.\n" + error.message, "error");
+        return;
+      }
+    }
+
+    const requestID = pending.requestID;
+    const version = ++operationVersion;
+    busy = true;
+    updateControls();
+    show("Creating location…");
+
+    function failed(error) {
+      if (version !== operationVersion || !pending) return;
+      busy = false;
+      updateControls();
+      show("The result could not be confirmed. Tap Retry same request " +
+        "to check or finish it.\n\nReference: " + requestID + "\n" +
+        (error && error.message ? error.message : String(error)), "error");
+    }
+
+    try {
+      google.script.run
+        .withSuccessHandler(result => {
+          if (version !== operationVersion || !pending) return;
+          if (!result || typeof result.accepted !== "boolean" ||
+              result.requestID !== requestID ||
+              typeof result.locationID !== "string" ||
+              typeof result.message !== "string" ||
+              (result.accepted && !/^LOC-\d+$/.test(result.locationID))) {
+            failed(new Error("Unexpected server response."));
+            return;
+          }
+
+          busy = false;
+          const message = (result.accepted ? "" : "Rejected: ") +
+            result.message + "\n\nReference: " + requestID;
+          try {
+            sessionStorage.removeItem(storageKey);
+          } catch (error) {
+            updateControls();
+            show(message + "\n\nAllow browser storage, then retry this " +
+              "same request before starting another location.",
+              result.accepted ? "success" : "error");
+            return;
+          }
+
+          pending = null;
+          completed = result.accepted;
+          updateControls();
+          show(message, result.accepted ? "success" : "error");
+        })
+        .withFailureHandler(failed)
+        .submitWebNewLocation(pending);
+    } catch (error) {
+      failed(error);
+    }
+  });
+
+  $("nextButton").addEventListener("click", () => {
+    if (!completed || busy || blocked || pending) return;
+    operationVersion++;
+    $("newLocationForm").reset();
+    completed = false;
+    updateControls();
+    show("Enter the details of the new location.");
+    $("locationName").focus();
+  });
+
+  function initializePage() {
+    try {
+      const saved = sessionStorage.getItem(storageKey);
+      if (saved !== null) {
+        const request = JSON.parse(saved);
+        if (!request || !requestPattern.test(request.requestID) ||
+            typeof request.locationName !== "string" ||
+            typeof request.notes !== "string") {
+          throw new Error("The saved request is incomplete.");
+        }
+        pending = request;
+        $("locationName").value = pending.locationName;
+        $("notes").value = pending.notes;
+      }
+    } catch (error) {
+      blocked = true;
+      updateControls();
+      show("Could not read the saved request. Check NewLocationRequests " +
+        "and Locations before trying again.\n" + error.message, "error");
+      return;
+    }
+
+    updateControls();
+    show(pending ? "An earlier request has no confirmed result.\nLocation: " +
+      pending.locationName + "\nTap Retry same request to resolve it." :
+      "Enter the details of the new location.");
+  }
+
+  initializePage();
+</script>
+</body>
+</html>

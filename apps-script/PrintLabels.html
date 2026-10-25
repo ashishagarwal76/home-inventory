@@ -1,0 +1,284 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    .print-labels {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    .print-labels select,
+    .print-labels button {
+      padding: 10px;
+      font-size: 15px;
+      margin-top: 10px;
+    }
+    .print-labels select {
+      width: 100%;
+      max-width: 300px;
+    }
+    #labelPreview {
+      margin-top: 20px;
+    }
+  #labelPreview {
+    overflow-x: auto;
+  }
+
+  .label-sheet {
+    width: 7.5in;
+    height: 10in;
+    display: grid;
+    grid-template-columns: repeat(var(--columns), 1fr);
+    grid-template-rows: repeat(var(--rows), 1fr);
+    margin-bottom: 24px;
+    background: white;
+  }
+
+  .label-sheet[data-size="48"] {
+    --columns: 4;
+    --rows: 12;
+    --qr-size: 0.6in;
+  }
+
+  .label-sheet[data-size="24"] {
+    --columns: 3;
+    --rows: 8;
+    --qr-size: 0.9in;
+  }
+
+  .label-sheet[data-size="8"] {
+    --columns: 2;
+    --rows: 4;
+    --qr-size: 1.5in;
+  }
+
+  .qr-label {
+    box-sizing: border-box;
+    min-width: 0;
+    min-height: 0;
+    padding: 0.05in;
+    border: 0.5pt dotted #999;
+    display: grid;
+    grid-template-columns: var(--qr-size) minmax(0, 1fr);
+    grid-template-rows: 1fr 1fr;
+    column-gap: 0.04in;
+    overflow: hidden;
+  }
+
+  .qr-image {
+    grid-row: 1 / 3;
+    align-self: center;
+    width: var(--qr-size);
+    height: var(--qr-size);
+  }
+
+  .qr-image svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .qr-label > div:nth-child(2) {
+    align-self: end;
+    max-height: 100%;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    font: bold 9pt Arial, sans-serif;
+  }
+
+  .qr-label > div:nth-child(3) {
+    align-self: start;
+    padding-top: 3px;
+    overflow-wrap: anywhere;
+    font: 8pt Arial, sans-serif;
+  }
+  @page {
+    size: letter portrait;
+    margin: 0.5in;
+  }
+
+  @media print {
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+    }
+
+    body > :not(.print-labels) {
+      display: none !important;
+    }
+
+    .print-labels {
+      margin: 0;
+      padding: 0;
+    }
+
+    .print-labels > :not(#labelPreview) {
+      display: none !important;
+    }
+
+    #labelPreview {
+      margin: 0;
+      overflow: visible;
+    }
+
+    .label-sheet {
+      margin: 0;
+      break-inside: avoid;
+      break-after: page;
+    }
+
+    .label-sheet:last-child {
+      break-after: auto;
+    }
+  }
+  </style>
+</head>
+<body>
+  <div class="print-labels">
+    <h2>Print QR Labels</h2>
+
+    <label for="labelSize">Select Label Size</label>
+    <div>
+      <select id="labelSize">
+        <option value="48">Small - 48 per sheet</option>
+        <option value="24">Medium - 24 per sheet</option>
+        <option value="8">Large - 8 per sheet</option>
+      </select>
+    </div>
+    <section id="recordSelection">
+      <h3>Select items to print</h3>
+      <p>Choose the inventory items you want labels for.</p>
+      <div id="recordList"></div>
+    </section>
+    <button type="button" onclick="previewSelectedLabels()">
+      Preview Labels
+    </button>
+    <button type="button" onclick="printSelectedLabels()">
+      Print Labels
+    </button>
+    <div id="labelPreview"></div>
+  </div>
+  <script>
+  function previewSelectedLabels() {
+    const preview = document.getElementById("labelPreview");
+    const selected = document.querySelectorAll(
+      "#recordList .label-record:checked"
+    );
+
+    preview.textContent = "";
+
+    if (!selected.length) {
+      preview.textContent = "Select at least one record first.";
+      return;
+    }
+
+    if (typeof qrcode !== "function") {
+      preview.textContent =
+        "The QR library did not load. Refresh the page and try again.";
+      return;
+    }
+
+    try {
+      const labels = document.createDocumentFragment();
+      const capacity = Number(document.getElementById("labelSize").value);
+      let sheet;
+
+      selected.forEach(function (checkbox, index) {
+        if (index % capacity === 0) {
+          sheet = document.createElement("div");
+          sheet.className = "label-sheet";
+          sheet.dataset.size = String(capacity);
+          labels.appendChild(sheet);
+        }
+        const label = document.createElement("div");
+        label.className = "qr-label";
+
+        const qr = qrcode(0, "M");
+        qr.addData(checkbox.value);
+        qr.make();
+
+        const code = document.createElement("div");
+        code.className = "qr-image";
+        code.innerHTML = qr.createSvgTag(4, 16);
+
+        const name = document.createElement("div");
+        name.textContent = checkbox.dataset.name;
+
+        const id = document.createElement("div");
+        id.textContent = checkbox.value;
+
+        label.appendChild(code);
+        label.appendChild(name);
+        label.appendChild(id);
+        sheet.appendChild(label);
+      });
+
+      preview.appendChild(labels);
+    } catch (error) {
+      preview.textContent = "Could not create labels: " + error.message;
+    }
+  }
+  </script>
+
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+
+  <script>
+  function loadLabelRecords() {
+    const list = document.getElementById("recordList");
+    list.textContent = "Loading records…";
+
+    google.script.run
+      .withSuccessHandler(function (records) {
+        list.textContent = "";
+
+        if (!records.length) {
+          list.textContent = "No records available for labels.";
+          return;
+        }
+
+        records.forEach(function (record) {
+          const row = document.createElement("label");
+          row.style.display = "block";
+          row.style.padding = "6px 0";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.className = "label-record";
+          checkbox.value = record.id;
+          checkbox.dataset.name = record.name;
+          checkbox.dataset.type = record.type;
+
+          row.appendChild(checkbox);
+          row.appendChild(document.createTextNode(
+            " " + record.name + " — " + record.id +
+            " (" + record.type + ")"
+          ));
+          list.appendChild(row);
+        });
+      })
+      .withFailureHandler(function (error) {
+        list.textContent = "Could not load records: " + error.message;
+      })
+      .getPrintLabelRecords();
+    }
+
+    loadLabelRecords();
+  </script>
+  <script>
+    function printSelectedLabels() {
+      previewSelectedLabels();
+
+      if (!document.querySelector("#labelPreview .label-sheet")) {
+        return;
+      }
+
+      window.focus();
+      window.print();
+    }
+  </script>
+</body>
+</html>
+

@@ -1,0 +1,86 @@
+<script>
+(function () {
+  const select = document.getElementById('item') ||
+    document.getElementById('itemID') ||
+    document.getElementById('boxID');
+  if (!select || select.tagName !== 'SELECT') return;
+
+  let desiredID = '';
+  let finished = false;
+  const observer = new MutationObserver(applySelection);
+
+  function finish() {
+    finished = true;
+    observer.disconnect();
+    document.removeEventListener('change', userChangedSelection, true);
+    document.removeEventListener('submit', finish, true);
+    window.removeEventListener('pagehide', finish);
+  }
+
+  function userChangedSelection(event) {
+    if (event.isTrusted && event.target === select) finish();
+  }
+
+  function applySelection() {
+    if (finished || !desiredID) return;
+
+    // Preserve saved requests and any selection already made on this form.
+    try {
+      if ((typeof pending !== 'undefined' && pending) || select.value) {
+        finish();
+        return;
+      }
+    } catch (error) {
+      finish();
+      return;
+    }
+
+    // A disabled parent fieldset also means that choices are not ready.
+    if (select.matches(':disabled')) return;
+
+    const option = Array.from(select.options).find(function (entry) {
+      return entry.value === desiredID && !entry.disabled;
+    });
+
+    if (!option) {
+      if (select.options.length > 1) finish();
+      return;
+    }
+
+    select.value = desiredID;
+    finish();
+    // Keep the form's existing unit, photo, and choice updates.
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  document.addEventListener('change', userChangedSelection, true);
+  document.addEventListener('submit', finish, true);
+  window.addEventListener('pagehide', finish);
+
+  try {
+    google.script.url.getLocation(function (location) {
+      if (finished) return;
+      const parameters = location && location.parameter;
+      const value = parameters && parameters[
+        select.id === 'boxID' ? 'boxID' : 'itemID'
+      ];
+
+      if (typeof value !== 'string' || !value.trim() || value.length > 100) {
+        finish();
+        return;
+      }
+
+      desiredID = value.trim();
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['disabled']
+      });
+      applySelection();
+    });
+  } catch (error) {
+    finish();
+  }
+})();
+</script>

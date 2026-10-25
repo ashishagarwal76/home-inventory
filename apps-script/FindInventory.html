@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Inventory – Find Inventory</title>
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; padding: 16px; background: #f3f7f9; color: #183440; font-family: system-ui, sans-serif; }
+    main { max-width: 720px; margin: 8px auto; padding: 24px; background: white; border: 1px solid #dbe5ea; border-radius: 14px; }
+    h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; }
+    h2 { margin: 0 0 8px; font-size: 21px; overflow-wrap: anywhere; }
+    .help { color: #536873; font-size: 14px; line-height: 1.5; }
+    label { display: block; margin: 24px 0 6px; font-weight: 600; }
+    input, button { min-height: 48px; padding: 12px; border-radius: 8px; font: inherit; font-size: 16px; }
+    input { width: 100%; border: 1px solid #b7c9d1; }
+    button { border: 0; background: #165d78; color: white; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    button:focus-visible, input:focus { outline: 2px solid #26718d; outline-offset: 2px; }
+    #searchButton { width: 100%; margin-top: 14px; }
+    #searchHint { margin: 8px 0 0; }
+    #status { padding: 12px; border-radius: 8px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+    .info { background: #edf4f7; color: #274957; }
+    .error { background: #fff0ef; color: #92372f; }
+    .reportHeader { margin-top: 28px; border-top: 1px solid #dbe5ea; padding-top: 24px; }
+    #printButton { border: 1px solid #b7c9d1; background: #edf4f7; color: #165d78; margin-bottom: 18px; }
+    .item { padding: 20px 0; border-top: 1px solid #dbe5ea; break-inside: avoid; }
+    .meta { margin: 0 0 16px; color: #536873; font-size: 14px; overflow-wrap: anywhere; }
+    .totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
+    .total { padding: 12px 10px; background: #edf4f7; border-radius: 8px; overflow-wrap: anywhere; }
+    .total span { display: block; color: #536873; font-size: 12px; margin-bottom: 6px; }
+    .total strong { font-size: 16px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+    th, td { padding: 12px 6px; text-align: left; border-bottom: 1px solid #dbe5ea; overflow-wrap: anywhere; }
+    th { color: #536873; font-weight: 600; }
+    th:last-child, td:last-child { text-align: right; white-space: nowrap; }
+    caption { text-align: left; font-weight: 600; margin-bottom: 6px; }
+    .member td { background: #f7fafb; }
+    details { margin: 16px 0 0; font-size: 14px; }
+    summary { color: #165d78; cursor: pointer; padding: 6px 0; }
+    details p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+    @media (max-width: 480px) {
+      main { padding: 20px 16px; }
+      .totals { grid-template-columns: 1fr; }
+      .total { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+      .total span { margin: 0; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+      table, tbody, tr, td { display: block; width: 100%; }
+      tr { border-bottom: 1px solid #dbe5ea; padding: 8px 0; }
+      td, td:last-child { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; padding: 5px 6px; border: 0; text-align: left; white-space: normal; }
+      td::before { content: attr(data-label); font-weight: 600; color: #536873; }
+    }
+    @media print {
+      body { padding: 0; background: white; font-size: 11pt; }
+      main { max-width: none; margin: 0; border: 0; padding: 0; }
+      #inventoryHomeNavigation, #searchForm, #intro, #status, #printButton { display: none !important; }
+      .reportHeader { border: 0; padding-top: 12px; }
+      .totals { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .total { display: block; border: 1px solid #dbe5ea; background: white; }
+      table { display: table; }
+      thead { display: table-header-group; position: static; width: auto; height: auto; clip-path: none; }
+      tbody { display: table-row-group; }
+      tr { display: table-row; }
+      td, td:last-child { display: table-cell; border-bottom: 1px solid #dbe5ea; }
+      td::before { content: none; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Find Inventory</h1>
+  <p id="intro" class="help">Enter an item description to see where it is stored and how much is available.</p>
+  <form id="searchForm" role="search">
+    <label for="query">Item name or description</label>
+    <input id="query" type="search" maxlength="200" placeholder="e.g. AA batteries, M3 screws, USB cable" aria-describedby="searchHint" required>
+    <p id="searchHint" class="help">Search words from the item name, category or Notes. All entered words must match.</p>
+    <button id="searchButton" type="submit" disabled>Find inventory</button>
+  </form>
+  <p id="status" class="info" role="status" aria-live="polite">Enter a description to generate an availability report.</p>
+  <section id="report" aria-label="Inventory availability report" hidden>
+    <div class="reportHeader">
+      <h2 id="reportTitle"></h2>
+      <p id="reportTime" class="help"></p>
+      <button id="printButton" type="button">Print report</button>
+    </div>
+    <div id="items"></div>
+  </section>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  let busy = false;
+  let requestVersion = 0;
+  let currentReport = null;
+
+  function show(message, type = "info") {
+    $("status").textContent = message;
+    $("status").className = type;
+  }
+  function updateControls() {
+    $("searchButton").disabled = busy || !$("query").value.trim();
+    $("searchButton").textContent = busy ? "Searching…" : "Find inventory";
+    $("report").setAttribute("aria-busy", String(busy));
+    $("printButton").disabled = busy || !currentReport;
+  }
+  function node(tag, text, className) {
+    const element = document.createElement(tag);
+    if (text !== undefined) element.textContent = text;
+    if (className) element.className = className;
+    return element;
+  }
+  function number(value) {
+    return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  }
+  function validReport(value, query) {
+    if (!value || value.query !== query || typeof value.generatedAt !== "string" ||
+        !Number.isFinite(Date.parse(value.generatedAt)) || !Array.isArray(value.items)) return false;
+    const ids = new Set();
+    for (const item of value.items) {
+      if (!item || !["id", "name", "category", "unit", "notes"].every(key =>
+          typeof item[key] === "string") || !item.id || !item.name || !item.unit ||
+          ids.has(item.id) || !Array.isArray(item.positions) ||
+          !["availableQuantity", "withFamilyQuantity", "totalQuantity"].every(key =>
+            Number.isFinite(item[key]) && item[key] >= 0)) return false;
+      ids.add(item.id);
+      if (!item.positions.every(position => position &&
+          ["storageID", "boxName", "locationID", "locationName", "memberEmail"].every(key =>
+            typeof position[key] === "string") &&
+          ["box", "location", "member"].includes(position.kind) &&
+          Number.isFinite(position.quantity) && position.quantity > 0)) return false;
+    }
+    return true;
+  }
+  function renderReport(value) {
+    $("items").replaceChildren();
+    $("reportTitle").textContent = "Results for “" + value.query + "”";
+    $("reportTime").textContent = value.items.length +
+      (value.items.length === 1 ? " item matched" : " items matched") +
+      " · Generated " + new Date(value.generatedAt).toLocaleString();
+    for (const item of value.items) {
+      const card = node("section", undefined, "item");
+      card.appendChild(node("h2", item.name));
+      if (item.category) card.appendChild(node("p", item.category, "meta"));
+      const totals = node("div", undefined, "totals");
+      for (const [label, amount] of [
+        ["Available in storage", item.availableQuantity],
+        ["With family", item.withFamilyQuantity], ["Total owned", item.totalQuantity]
+      ]) {
+        const total = node("div", undefined, "total");
+        total.appendChild(node("span", label));
+        total.appendChild(node("strong", number(amount) + " " + item.unit));
+        totals.appendChild(total);
+      }
+      card.appendChild(totals);
+      if (!item.positions.length) {
+        card.appendChild(node("p", "This item matches your search, but no stock is currently recorded. Use Home > Add Inventory to record its quantity.", "help"));
+      } else {
+        if (item.availableQuantity === 0) {
+          card.appendChild(node("p", "No quantity is currently available in boxes or locations. The recorded quantity is held by family members.", "help"));
+        }
+        const table = node("table");
+        table.appendChild(node("caption", "Where to find this item"));
+        const headings = ["Box / holder", "Location", "Quantity"];
+        const head = node("thead"), headRow = node("tr");
+        headings.forEach(label => { const cell = node("th", label); cell.setAttribute("scope", "col"); headRow.appendChild(cell); });
+        head.appendChild(headRow); table.appendChild(head);
+        const body = node("tbody");
+        for (const position of item.positions) {
+          const row = node("tr", undefined, position.kind === "member" ? "member" : "");
+          const holder = position.kind === "member" ? position.memberEmail :
+            position.kind === "box" ? position.boxPath || position.boxName || "Box description unavailable" : "Loose stock";
+          const location = position.kind === "member" ? "With family (issued)" :
+            position.locationName;
+          [holder, location, number(position.quantity) + " " + item.unit].forEach((text, index) => {
+            const cell = node("td", text); cell.setAttribute("data-label", headings[index]); row.appendChild(cell);
+          });
+          body.appendChild(row);
+        }
+        table.appendChild(body); card.appendChild(table);
+      }
+      if (item.notes) {
+        const details = node("details");
+        details.appendChild(node("summary", "Item notes"));
+        details.appendChild(node("p", item.notes));
+        card.appendChild(details);
+      }
+      $("items").appendChild(card);
+    }
+    $("report").hidden = false;
+  }
+  $("query").addEventListener("input", () => {
+    requestVersion++;
+    busy = false;
+    currentReport = null;
+    $("report").hidden = true;
+    updateControls();
+    show("Enter a description and tap Find inventory to generate a report.");
+  });
+  $("searchForm").addEventListener("submit", event => {
+    event.preventDefault();
+    if (busy || !$("searchForm").reportValidity()) return;
+    const query = $("query").value.trim().replace(/\s+/g, " ");
+    if (!query) { show("Enter an item name or description to search.", "error"); return; }
+    if (query.length > 200) { show("Please keep the search to 200 characters or fewer.", "error"); return; }
+    const version = ++requestVersion;
+    busy = true;
+    currentReport = null;
+    $("report").hidden = true;
+    updateControls();
+    show("Searching current inventory…");
+    function failed(error) {
+      if (version !== requestVersion) return;
+      busy = false;
+      currentReport = null;
+      $("report").hidden = true;
+      updateControls();
+      show("Could not generate the report. " +
+        (error && error.message ? error.message : String(error)) +
+        "\nTry the search again.", "error");
+    }
+    try {
+      google.script.run.withSuccessHandler(value => {
+        if (version !== requestVersion) return;
+        try {
+          if (!validReport(value, query)) throw new Error("Unexpected inventory report response.");
+          renderReport(value);
+          currentReport = value;
+          busy = false;
+          updateControls();
+          show(value.items.length ? "Report ready. Quantities with family are shown separately from available storage stock." :
+            "No items match this description. Try fewer words or different wording.");
+        } catch (error) { failed(error); }
+      }).withFailureHandler(failed).searchInventory(query);
+    } catch (error) { failed(error); }
+  });
+  $("printButton").addEventListener("click", () => {
+    if (!currentReport || busy) return;
+    try { window.print(); }
+    catch (error) { show("Printing is unavailable in this browser. You can read the report on this page.", "error"); }
+  });
+  updateControls();
+</script>
+</body>
+</html>

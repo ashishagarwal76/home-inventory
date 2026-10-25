@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scan QR Label</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, sans-serif;
+      color: #172b3a;
+      background: #f5f8fb;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; padding: 24px 16px; }
+    main { max-width: 640px; margin: 0 auto; }
+    h1 { margin: 0 0 12px; font-size: 28px; }
+    h2 { margin: 0 0 16px; font-size: 21px; }
+    p { line-height: 1.5; }
+    .card {
+      margin: 20px 0;
+      padding: 22px;
+      background: #fff;
+      border: 1px solid #d7e2eb;
+      border-radius: 14px;
+    }
+    .button {
+      display: inline-block;
+      min-height: 44px;
+      padding: 12px 18px;
+      border: 1px solid #176da2;
+      border-radius: 8px;
+      background: #176da2;
+      color: #fff;
+      font: bold 16px Arial, sans-serif;
+      text-align: center;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .button:hover { background: #115783; }
+    .button:focus-visible, input:focus-visible {
+      outline: 3px solid #e3ab00;
+      outline-offset: 3px;
+    }
+    .button:disabled { cursor: wait; opacity: .65; }
+    label { display: block; margin-bottom: 8px; font-weight: bold; }
+    input {
+      width: 100%;
+      min-height: 46px;
+      margin-bottom: 12px;
+      padding: 11px;
+      border: 1px solid #839aab;
+      border-radius: 7px;
+      color: #172b3a;
+      font: 16px Arial, sans-serif;
+    }
+    .hint { color: #506577; font-size: 14px; }
+    #lookupStatus { margin: 16px 0 0; }
+    #lookupStatus.error { color: #a12626; }
+    dl { margin: 0; }
+    dt { margin-top: 14px; color: #506577; font-size: 14px; }
+    dd { margin: 5px 0 0; overflow-wrap: anywhere; }
+    #recordName { font-size: 21px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Scan QR Label</h1>
+    <p>Scan an item, box, or location label to open its inventory record.</p>
+
+    <section class="card" aria-labelledby="cameraHeading">
+      <h2 id="cameraHeading">Use your camera</h2>
+      <a id="startScanLink" class="button" target="_top" hidden>
+        Start Camera Scan
+      </a>
+      <p id="scannerStatus" class="hint">Preparing the scanner…</p>
+    </section>
+
+    <section class="card" aria-labelledby="manualHeading">
+      <h2 id="manualHeading">Enter a record ID</h2>
+      <p class="hint">You can also type the ID printed on a label, or use a scanner that types the ID here.</p>
+      <form id="recordLookupForm">
+        <label for="recordID">Record ID</label>
+        <input id="recordID" name="recordID" type="text" maxlength="100"
+               placeholder="ITEM-00001" autocomplete="off"
+               autocorrect="off" spellcheck="false" required>
+        <button id="lookupButton" class="button" type="submit">Open Record</button>
+      </form>
+      <p id="lookupStatus" role="status" aria-live="polite" aria-atomic="true"></p>
+    </section>
+
+    <section id="recordResult" class="card" aria-labelledby="resultHeading" hidden>
+      <h2 id="resultHeading">Inventory record</h2>
+      <dl>
+        <dt>Name</dt>
+        <dd id="recordName"></dd>
+        <dt>Record ID</dt>
+        <dd id="recordIdentifier"></dd>
+        <dt>Record type</dt>
+        <dd id="recordType"></dd>
+      </dl>
+      <div id="recordActions" hidden></div>
+      <div id="itemAvailability" hidden></div>
+      <div id="boxDetails" hidden></div>
+    </section>
+  </main>
+
+  <!-- This fixed return address comes from the Apps Script template. -->
+  <a id="inventoryReturnLink" href="<?= appUrl ?>?page=scan" data-scanner-url="<?= scannerUrl ?>" hidden></a>
+<?!= HtmlService.createHtmlOutputFromFile('BoxItemPhotos').getContent(); ?>
+  <script>
+    // Address of the live camera scanner.
+    const SCANNER_URL = document.getElementById('inventoryReturnLink').dataset.scannerUrl || '';
+
+    let lookupRequestNumber = 0;
+
+    function configureScannerLink() {
+      const link = document.getElementById('startScanLink');
+      const status = document.getElementById('scannerStatus');
+
+      if (!SCANNER_URL.trim()) {
+        status.textContent =
+          'Camera scanning is not connected yet. You can enter a record ID below.';
+        return;
+      }
+
+      try {
+        const scanner = new URL(SCANNER_URL);
+        if (scanner.protocol !== 'https:' ||
+            !scanner.hostname.endsWith('.pages.dev') ||
+            scanner.username || scanner.password || scanner.port) {
+          throw new Error('Invalid scanner address.');
+        }
+
+        const returnAddress = new URL(
+          document.getElementById('inventoryReturnLink').href
+        );
+        returnAddress.searchParams.set('page', 'scan');
+        returnAddress.searchParams.delete('record');
+        scanner.searchParams.set('return', returnAddress.href);
+        scanner.hash = '';
+
+        link.href = scanner.href;
+        link.hidden = false;
+        status.textContent =
+          'Scan a label on the camera page, then choose Open inventory record to return here.';
+      } catch (error) {
+        status.textContent =
+          'The camera scanner is unavailable. You can enter a record ID below.';
+      }
+    }
+        function renderScannedItemStock(record) {
+      const container = document.getElementById('itemAvailability');
+      container.replaceChildren();
+
+      const stock = record.type === 'Items' ? record.availability : null;
+      container.hidden = !stock;
+      if (!stock) return;
+
+      function add(tag, text) {
+        const element = document.createElement(tag);
+        element.textContent = text;
+        container.appendChild(element);
+      }
+
+      function quantity(value) {
+        return value.toLocaleString(undefined, {
+          maximumFractionDigits: 6
+        }) + ' ' + stock.unit;
+      }
+
+      add('h2', 'Current stock');
+
+      [
+        ['Available in storage', stock.availableQuantity],
+        ['With family', stock.withFamilyQuantity],
+        ['Total owned', stock.totalQuantity]
+      ].forEach(function (entry) {
+        add('p', entry[0] + ': ' + quantity(entry[1]));
+      });
+
+      add('h3', 'Recorded positions');
+
+      if (!stock.positions.length) {
+        add('p', 'No stock is currently recorded.');
+      }
+
+      stock.positions.forEach(function (position) {
+        let place;
+
+        if (position.kind === 'member') {
+          place = 'With ' + position.memberEmail;
+        } else if (position.kind === 'box') {
+          place = position.boxPath || position.boxName;
+          if (position.locationName) {
+            place += ' — ' + position.locationName;
+          }
+        } else {
+          place = 'At ' + position.locationName;
+        }
+
+        add('p', place + ': ' + quantity(position.quantity));
+      });
+    }
+    function renderScannedBoxDetails(record) {
+      const container = document.getElementById('boxDetails');
+      container.replaceChildren();
+
+      const box = record.type === 'Boxes' ? record.boxDetails : null;
+      container.hidden = !box;
+      if (!box) return;
+
+      function add(tag, text, parent) {
+        const element = document.createElement(tag);
+        element.textContent = text;
+        (parent || container).appendChild(element);
+        return element;
+      }
+
+      function quantity(value, unit) {
+        return value.toLocaleString(undefined, {
+          maximumFractionDigits: 6
+        }) + ' ' + unit;
+      }
+
+      add('h2', 'Where this box is');
+      add('p', box.path);
+
+      add('h2', 'Boxes inside');
+
+      if (!box.nestedBoxes.length) {
+        add('p', 'No nested boxes are recorded.');
+      } else {
+        const list = add('ul', '');
+        box.nestedBoxes.forEach(function (child) {
+          add('li', child.path, list);
+        });
+      }
+
+      add('h2', 'Contents, including nested boxes');
+
+      if (!box.itemTotals.length) {
+        add('p', 'No stock is currently recorded inside this box or its nested boxes.');
+      }
+
+      box.itemTotals.forEach(function (item) {
+        add('h3', item.itemName);
+        addBoxItemPhoto(item, container);
+        add('p', 'Total: ' + quantity(item.quantity, item.unit));
+
+        const list = add('ul', '');
+        box.contents.filter(function (position) {
+          return position.itemID === item.itemID;
+        }).forEach(function (position) {
+          add('li', position.path + ': ' +
+            quantity(position.quantity, position.unit), list);
+        });
+      });
+    }
+    function renderScannedRecordActions(record) {
+      const container = document.getElementById('recordActions');
+      container.replaceChildren();
+
+      const actions = record.type === 'Items' ? [
+        ['Add stock', 'add', 'itemID'],
+        ['Consume stock', 'consume', 'itemID'],
+        ['Move stock', 'move', 'itemID'],
+        ['Issue / Return', 'family', 'itemID']
+      ] : record.type === 'Boxes' ? [
+        ['Move this box', 'movebox', 'boxID']
+      ] : [];
+
+      container.hidden = actions.length === 0;
+      if (!actions.length) return;
+
+      container.style.margin = '24px 0';
+
+      const heading = document.createElement('h2');
+      heading.textContent = 'Actions';
+      container.appendChild(heading);
+
+      const appURL = document.getElementById('inventoryReturnLink').href;
+
+      actions.forEach(function (action) {
+        const destination = new URL(appURL);
+        destination.search = '';
+        destination.searchParams.set('page', action[1]);
+        destination.searchParams.set(action[2], record.id);
+
+        const link = document.createElement('a');
+        link.className = 'button';
+        link.textContent = action[0];
+        link.href = destination.href;
+        link.target = '_top';
+        link.style.margin = '4px 8px 4px 0';
+        container.appendChild(link);
+      });
+    }
+    function lookupRecord(rawID) {
+      resetBoxItemPhotos();
+      const requestNumber = ++lookupRequestNumber;
+      const status = document.getElementById('lookupStatus');
+      const result = document.getElementById('recordResult');
+      const button = document.getElementById('lookupButton');
+      const input = document.getElementById('recordID');
+      const id = typeof rawID === 'string' ? rawID.trim() : '';
+
+      result.hidden = true;
+      status.className = '';
+      button.disabled = false;
+
+      if (!id || id.length > 100) {
+        status.className = 'error';
+        status.textContent = 'Enter a valid inventory record ID.';
+        return;
+      }
+
+      input.value = id;
+      status.textContent = 'Looking up the record…';
+      button.disabled = true;
+
+      google.script.run
+        .withSuccessHandler(function (record) {
+          if (requestNumber !== lookupRequestNumber) return;
+          button.disabled = false;
+
+          if (!record || record.id !== id ||
+              typeof record.name !== 'string' ||
+              typeof record.type !== 'string') {
+            status.className = 'error';
+            status.textContent = 'The inventory record could not be opened.';
+            return;
+          }
+
+          document.getElementById('recordName').textContent = record.name;
+          document.getElementById('recordIdentifier').textContent = record.id;
+          document.getElementById('recordType').textContent = record.type;
+          renderScannedRecordActions(record);
+          renderScannedItemStock(record);
+          renderScannedBoxDetails(record);
+          result.hidden = false;
+          status.textContent = 'Record found.';
+          result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        })
+        .withFailureHandler(function (error) {
+          if (requestNumber !== lookupRequestNumber) return;
+          button.disabled = false;
+          status.className = 'error';
+          status.textContent = error && error.message
+            ? error.message
+            : 'Could not look up the record. Please try again.';
+        })
+        .lookupScannedInventoryRecord(id);
+    }
+
+    document.getElementById('recordLookupForm').addEventListener(
+      'submit', function (event) {
+        event.preventDefault();
+        lookupRecord(document.getElementById('recordID').value);
+      }
+    );
+
+    configureScannerLink();
+
+    // Apps Script runs this HTML in an iframe; read the host URL through its API.
+    google.script.url.getLocation(function (location) {
+      const parameters = location && location.parameter;
+      if (parameters && typeof parameters.record === 'string') {
+        lookupRecord(parameters.record);
+      }
+    });
+  </script>
+</body>
+</html>

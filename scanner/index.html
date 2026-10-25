@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Scan QR Label · Home Inventory</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script type="module" src="scanner.mjs"></script>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Home Inventory</p>
+    <h1>Scan QR Label</h1>
+    <p class="intro">Point your camera at an item, box, or location label.</p>
+
+    <section class="camera-panel" aria-label="Label scanner">
+      <div id="reader"></div>
+      <p id="cameraHint">Your camera opens when you tap Start camera.</p>
+    </section>
+
+    <p id="status" class="status" role="status" aria-live="polite">Ready to scan.</p>
+    <div class="controls">
+      <button id="startButton" type="button">Start camera</button>
+      <button id="stopButton" class="secondary" type="button" disabled>Stop camera</button>
+    </div>
+
+    <section id="result" class="result" aria-labelledby="resultTitle" hidden>
+      <p class="eyebrow">Label read</p>
+      <h2 id="resultTitle"></h2>
+      <p id="resultType"></p>
+      <a id="openRecord" class="primary-link" hidden>Open inventory record</a>
+      <button id="againButton" class="secondary" type="button">Scan another label</button>
+    </section>
+
+    <details>
+      <summary>Enter the printed ID instead</summary>
+      <form id="manualForm">
+        <label for="manualID">Record ID</label>
+        <div class="manual-controls">
+          <input id="manualID" type="text" maxlength="100" placeholder="ITEM-00001" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+          <button id="manualButton" type="submit">Use ID</button>
+        </div>
+      </form>
+    </details>
+
+    <p id="returnHint" class="help" hidden>To open a record, launch this page using Scan QR Label in your inventory app.</p>
+    <a id="backLink" class="back-link" hidden>Return to inventory</a>
+    <p class="privacy">Camera images are decoded on this device. Only the record ID is returned to your inventory app.</p>
+  </main>
+</body>
+</html>

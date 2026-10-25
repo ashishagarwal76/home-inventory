@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Inventory – Move Box</title>
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; padding: 16px; background: #f3f7f9; color: #183440; font-family: system-ui, sans-serif; }
+    main { max-width: 520px; margin: 8px auto; padding: 24px; background: white; border: 1px solid #dbe5ea; border-radius: 14px; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .help { color: #536873; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+    fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+    label { display: block; margin: 18px 0 6px; font-weight: 600; }
+    select, textarea, button { width: 100%; padding: 12px; border-radius: 8px; font: inherit; font-size: 16px; }
+    select, textarea { border: 1px solid #b7c9d1; background: white; }
+    textarea { resize: vertical; }
+    select:focus, textarea:focus, button:focus-visible { outline: 2px solid #26718d; outline-offset: 2px; }
+    select:disabled, textarea:disabled { background: #f0f4f6; }
+    button { border: 0; margin-top: 20px; min-height: 48px; cursor: pointer; background: #165d78; color: white; font-weight: 600; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .secondary { border: 1px solid #b7c9d1; background: #edf4f7; color: #165d78; }
+    #currentPath { padding: 12px; border-radius: 8px; background: #edf4f7; }
+    #boxPhoto { width: 120px; height: 120px; margin-top: 12px; border: 1px solid #dbe5ea; border-radius: 8px; object-fit: cover; }
+    #result { margin: 18px 0 0; padding: 12px; border-radius: 8px; white-space: pre-line; overflow-wrap: anywhere; line-height: 1.5; }
+    .info { background: #edf4f7; color: #274957; }
+    .success { background: #e8f5ec; color: #185b32; }
+    .error { background: #fff0ef; color: #92372f; }
+    @media (max-width: 380px) { main { padding: 20px 16px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Move Box</h1>
+  <p class="help">Place a box in a location or inside another box. All boxes and inventory inside it move with it.</p>
+  <form id="moveBoxForm">
+    <fieldset id="fields">
+      <label for="boxID">Box to move</label>
+      <select id="boxID" required><option value="">Select a box</option></select>
+      <img id="boxPhoto" alt="Selected box" hidden>
+      <p id="currentPath" class="help" aria-live="polite">Select a box to see its current placement.</p>
+      <label for="destination">Move to (location or parent box)</label>
+      <select id="destination" aria-describedby="destinationHelp" required><option value="">Select a destination</option></select>
+      <p id="destinationHelp" class="help">The selected box and its descendants are excluded from destinations.</p>
+      <label for="notes">Notes (optional)</label>
+      <textarea id="notes" rows="3" maxlength="2000"></textarea>
+    </fieldset>
+    <button id="saveButton" type="submit">Move box</button>
+    <button id="nextButton" type="button" hidden>Move another box</button>
+  </form>
+  <p id="result" class="info" role="status" aria-live="polite"></p>
+  <button id="refreshButton" type="button" class="secondary">Refresh choices</button>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const key = "homeInventory.pendingWebMoveBox.v1";
+  const fields = ["boxID", "destination", "notes"];
+  const pattern = /^WEB-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  let options = null, pending = null, busy = false, loading = false, completed = false, blocked = false;
+  let operationVersion = 0, optionsVersion = 0, photoVersion = 0, photoBoxID = "", receipt = "";
+  function show(message, type = "info") { $("result").textContent = message; $("result").className = type; }
+  function selectedBox() { return options && options.boxes.find(box => box.id === $("boxID").value); }
+  function updateControls() {
+    $("fields").disabled = blocked || busy || loading || Boolean(pending) || completed || !options;
+    $("saveButton").hidden = completed;
+    $("nextButton").hidden = !completed;
+    $("nextButton").disabled = blocked || busy || loading;
+    $("saveButton").disabled = blocked || busy || completed || (!pending && (loading || !options || !options.boxes.length));
+    $("saveButton").textContent = busy ? "Saving…" : pending ? pending.finished ? "Finish" : "Retry same move" : "Move box";
+    $("refreshButton").disabled = blocked || busy || loading || Boolean(pending && !pending.finished);
+  }
+  function populate(id, entries, placeholder, selected) {
+    $(id).replaceChildren(new Option(placeholder, ""));
+    entries.forEach(entry => $(id).add(new Option(entry.label, entry.id)));
+    if (pending && selected && !entries.some(entry => entry.id === selected)) $(id).add(new Option(id === "boxID" ? "Previously selected box" : "Previously selected placement", selected));
+    $(id).value = selected || "";
+  }
+  function renderChoices() {
+    if (!options) return;
+    const boxID = pending ? pending.boxID : $("boxID").value;
+    const destination = pending ? pending.destination : $("destination").value;
+    populate("boxID", options.boxes, "Select a box", boxID);
+    const box = selectedBox();
+    const disallowed = new Set(box ? box.descendantIDs.concat(box.id, box.currentStorageID) : []);
+    populate("destination", options.destinations.filter(entry => !disallowed.has(entry.id)), "Select a location or parent box", destination);
+    $("currentPath").textContent = pending
+      ? "Saved movement details are fixed for retry. Current placement may already include this move."
+      : box ? "Currently: " + box.path : "Select a box to see its current placement.";
+    updatePhoto(); updateControls();
+  }
+  function updatePhoto() {
+    const id = pending ? pending.boxID : $("boxID").value;
+    if (id === photoBoxID) return;
+    photoBoxID = id; const version = ++photoVersion;
+    $("boxPhoto").hidden = true; $("boxPhoto").removeAttribute("src");
+    if (!id) return;
+    try {
+      google.script.run.withSuccessHandler(url => {
+        if (version !== photoVersion || id !== photoBoxID) return;
+        if (typeof url === "string" && /^data:image\/(jpeg|png|webp|gif);base64,/.test(url) && url.length <= 1500000) {
+          $("boxPhoto").src = url; $("boxPhoto").hidden = false;
+        }
+      }).withFailureHandler(() => {}).getMoveBoxThumbnail(id);
+    } catch (_) {}
+  }
+  $("boxPhoto").addEventListener("error", () => { $("boxPhoto").hidden = true; });
+  function loadOptions(preserve = false) {
+    if (blocked || busy || loading) return;
+    const version = ++optionsVersion; loading = true; updateControls();
+    if (!preserve) show("Loading boxes and destinations…");
+    function failed(error) {
+      if (version !== optionsVersion) return;
+      loading = false; updateControls();
+      show((receipt ? receipt + "\n\n" : "") + "Could not load choices. " +
+        (error && error.message ? error.message : String(error)) +
+        (pending && !pending.finished ? "\nYou can still retry this saved move." : "\nTap Refresh choices to try again."), "error");
+    }
+    try {
+      google.script.run.withSuccessHandler(value => {
+        if (version !== optionsVersion) return;
+        try {
+          if (!value || !Array.isArray(value.boxes) || !Array.isArray(value.destinations) ||
+              !value.boxes.every(box => box && ["id", "label", "currentStorageID", "path"].every(k => typeof box[k] === "string") &&
+                Array.isArray(box.descendantIDs) && box.descendantIDs.every(id => typeof id === "string")) ||
+              !value.destinations.every(entry => entry && typeof entry.id === "string" && typeof entry.label === "string") ||
+              new Set(value.boxes.map(box => box.id)).size !== value.boxes.length ||
+              new Set(value.destinations.map(entry => entry.id)).size !== value.destinations.length) throw new Error("Unexpected box choices.");
+          options = value; loading = false; renderChoices();
+          if (!preserve) show(pending ? pending.finished ? receipt + "\nTap Finish to clear the saved receipt." :
+            "An earlier move has no confirmed result. Tap Retry same move.\nReference: " + pending.requestID :
+            options.boxes.length ? "Choose the box and its destination." : "Create a box first, then tap Refresh choices.");
+        } catch (error) { failed(error); }
+      }).withFailureHandler(failed).getMoveBoxOptions();
+    } catch (error) { failed(error); }
+  }
+  function savePending(value) {
+    try { sessionStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch (error) { busy = false; updateControls(); show("Could not save this move for retry. Nothing new was sent.\nAllow browser storage, then try again.\n" + error.message, "error"); return false; }
+  }
+  function finish(message) {
+    pending.finished = true; pending.message = message; busy = false;
+    receipt = message + "\n\nReference: " + pending.requestID;
+    try { sessionStorage.removeItem(key); }
+    catch (error) {
+      try { sessionStorage.setItem(key, JSON.stringify(pending)); } catch (_) {}
+      updateControls(); show(receipt + "\nTap Finish when browser storage is available.", "success"); return;
+    }
+    pending = null; completed = true; updateControls(); show(receipt, "success"); loadOptions(true);
+  }
+  function sendPending() {
+    if (pending.finished) { finish(pending.message); return; }
+    if (!savePending(pending)) return;
+    optionsVersion++; loading = false;
+    const version = ++operationVersion;
+    const payload = {requestID: pending.requestID};
+    fields.forEach(field => { payload[field] = pending[field]; });
+    if (pending.expectedFromStorageID) payload.expectedFromStorageID = pending.expectedFromStorageID;
+    busy = true; updateControls(); show("Saving box movement…");
+    function failed(error) {
+      if (version !== operationVersion || !pending) return;
+      busy = false; updateControls();
+      show("The result could not be confirmed. Retry this same move.\nReference: " + pending.requestID + "\n" +
+        (error && error.message ? error.message : String(error)), "error");
+    }
+    try {
+      google.script.run.withSuccessHandler(result => {
+        if (version !== operationVersion || !pending) return;
+        if (!result || typeof result.accepted !== "boolean" || result.requestID !== pending.requestID ||
+            typeof result.message !== "string") { failed(new Error("Unexpected movement response.")); return; }
+        busy = false;
+        if (result.accepted) { finish(result.message); return; }
+        try { sessionStorage.removeItem(key); }
+        catch (error) { updateControls(); show("Rejected: " + result.message + "\nAllow browser storage, then retry this saved request to clear it.", "error"); return; }
+        pending = null; updateControls(); show("Rejected: " + result.message, "error"); loadOptions(true);
+      }).withFailureHandler(failed).submitWebMoveBox(payload);
+    } catch (error) { failed(error); }
+  }
+  $("moveBoxForm").addEventListener("submit", event => {
+    event.preventDefault();
+    if (blocked || busy || completed) return;
+    if (!pending) {
+      if (!options || loading || !$("moveBoxForm").reportValidity()) return;
+      const box = selectedBox();
+      if (!box) return;
+      const candidate = {requestID: "WEB-" + crypto.randomUUID(), expectedFromStorageID: box.currentStorageID, finished: false, message: ""};
+      fields.forEach(field => { candidate[field] = $(field).value.trim(); });
+      if (!savePending(candidate)) return;
+      pending = candidate;
+    }
+    sendPending();
+  });
+  $("boxID").addEventListener("change", () => { if (!pending && !busy && !completed && !loading) renderChoices(); });
+  $("refreshButton").addEventListener("click", () => { if (!pending || pending.finished) loadOptions(Boolean(receipt)); });
+  $("nextButton").addEventListener("click", () => {
+    if (!completed || pending || busy || loading || blocked) return;
+    operationVersion++; completed = false; receipt = "";
+    $("moveBoxForm").reset(); updateControls(); loadOptions();
+  });
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (raw !== null) {
+      const value = JSON.parse(raw);
+      if (!value || !pattern.test(value.requestID) || !fields.every(field => typeof value[field] === "string") ||
+          !value.boxID || !value.destination || (value.expectedFromStorageID != null && typeof value.expectedFromStorageID !== "string") ||
+          (value.finished != null && typeof value.finished !== "boolean") || (value.message != null && typeof value.message !== "string")) throw new Error("Incomplete saved movement.");
+      pending = value; pending.finished = value.finished === true; pending.message = value.message || "";
+      $("notes").value = pending.notes;
+      if (pending.finished) receipt = pending.message + "\n\nReference: " + pending.requestID;
+    }
+  } catch (error) {
+    blocked = true; show("Could not read the saved move. Check BoxMoves before starting another movement.\n" + error.message, "error");
+  }
+  updateControls(); if (!blocked) loadOptions();
+</script>
+</body>
+</html>

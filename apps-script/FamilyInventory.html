@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Inventory – Issue / Return Items</title>
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0; padding: 16px; background: #f3f7f9;
+      color: #183440; font-family: system-ui, sans-serif;
+    }
+    main {
+      max-width: 520px; margin: 8px auto; padding: 24px;
+      background: white; border: 1px solid #dbe5ea; border-radius: 14px;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; }
+    h2 { margin: 28px 0 8px; font-size: 20px; }
+    .help { color: #536873; font-size: 14px; line-height: 1.5; }
+    fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+    label { display: block; margin: 18px 0 6px; font-weight: 600; }
+    input, select, textarea, button {
+      width: 100%; padding: 12px; border-radius: 8px; font: inherit; font-size: 16px;
+    }
+    input, select, textarea { border: 1px solid #b7c9d1; background: white; }
+    textarea { resize: vertical; }
+    input:focus, select:focus, textarea:focus, button:focus-visible {
+      outline: 2px solid #26718d; outline-offset: 2px;
+    }
+    input:disabled, select:disabled, textarea:disabled { background: #f0f4f6; }
+    button {
+      border: 0; margin-top: 20px; min-height: 48px; cursor: pointer;
+      background: #165d78; color: white; font-weight: 600;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .secondary { border: 1px solid #b7c9d1; background: #edf4f7; color: #165d78; }
+    .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 20px 0 8px; }
+    .modes button { margin: 0; }
+    #result {
+      padding: 12px; margin: 18px 0 0; border-radius: 8px;
+      white-space: pre-line; overflow-wrap: anywhere; line-height: 1.5;
+    }
+    .info { color: #274957; background: #edf4f7; }
+    .success { color: #185b32; background: #e8f5ec; }
+    .error { color: #92372f; background: #fff0ef; }
+    #itemPhoto {
+      display: block; width: 120px; height: 120px; margin: 14px 0 0;
+      border-radius: 8px; object-fit: cover; border: 1px solid #dbe5ea;
+    }
+    #balanceHelp { margin: 12px 0 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; }
+    th, td { padding: 10px 6px; border-bottom: 1px solid #dbe5ea; text-align: left; overflow-wrap: anywhere; }
+    th { color: #536873; font-weight: 600; }
+    th:last-child, td:last-child { text-align: right; }
+    @media (max-width: 380px) {
+      main { padding: 20px 16px; }
+      th, td { padding: 10px 4px; font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Issue / Return Items</h1>
+  <p class="help">Track items held by family members and return them to a box or location.</p>
+  <div class="modes" role="group" aria-label="Movement type">
+    <button id="issueMode" type="button" aria-pressed="true">Issue Item</button>
+    <button id="returnMode" type="button" class="secondary" aria-pressed="false">Return Item</button>
+  </div>
+
+  <form id="familyForm">
+    <fieldset id="fields">
+      <label for="memberEmail">Family member</label>
+      <select id="memberEmail" required><option value="">Select a family member</option></select>
+      <label for="itemID">Item</label>
+      <select id="itemID" required><option value="">Select an item</option></select>
+      <img id="itemPhoto" alt="Selected inventory item" hidden>
+      <label id="storageLabel" for="storageID">Issue from</label>
+      <select id="storageID" aria-describedby="balanceHelp" required><option value="">Select a box or location</option></select>
+      <p id="balanceHelp" class="help" aria-live="polite">Select an item and storage to see available stock.</p>
+      <label id="quantityLabel" for="quantity">Quantity</label>
+      <input id="quantity" type="number" aria-describedby="balanceHelp" min="1" step="1" value="1" required>
+      <label for="notes">Notes (optional)</label>
+      <textarea id="notes" rows="3" maxlength="2000"></textarea>
+    </fieldset>
+    <button id="saveButton" type="submit">Issue item</button>
+    <button id="nextButton" type="button" hidden>Record another movement</button>
+  </form>
+  <p id="result" class="info" role="status" aria-live="polite"></p>
+  <button id="refreshButton" type="button" class="secondary">Refresh balances</button>
+
+  <h2>With Family</h2>
+  <p class="help">Current quantities held by each family member.</p>
+  <p id="emptyHoldings" class="help">Loading balances…</p>
+  <table id="familyTable" hidden>
+    <thead><tr><th scope="col">Family member</th><th scope="col">Item</th><th scope="col">Quantity</th></tr></thead>
+    <tbody id="holdingsRows"></tbody>
+  </table>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const storageKey = "homeInventory.pendingFamilyMovement.v1";
+  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const fieldIDs = ["itemID", "storageID", "memberEmail", "quantity", "notes"];
+  let mode = "issue";
+  let options = null;
+  let pending = null;
+  let busy = false;
+  let completed = false;
+  let blocked = false;
+  let optionsLoading = false;
+  let operationVersion = 0;
+  let optionsVersion = 0;
+  let photoVersion = 0;
+  let photoItemID = "";
+  let receiptMessage = "";
+
+  function show(message, type = "info") {
+    $("result").textContent = message;
+    $("result").className = type;
+  }
+  function wholeOnly(unit) {
+    return ["each", "ea", "pack", "packs", "piece", "pieces", "pcs"]
+      .includes(String(unit).trim().toLowerCase());
+  }
+  function item() {
+    return options && options.items.find(entry => entry.id === $("itemID").value);
+  }
+  function available(itemID, storageID) {
+    const row = options && options.balances.find(entry =>
+      entry.itemID === itemID && entry.storageID === storageID);
+    return row ? row.quantity : 0;
+  }
+  function possible() {
+    if (!options || !options.items.length || !options.storages.length) return false;
+    return mode === "issue" ? Boolean(options.members.length) : Boolean(options.returnMembers.length);
+  }
+  function hasStockForSelection() {
+    const selected = item();
+    if (!selected || !$("memberEmail").value || !$("storageID").value) return false;
+    const source = mode === "issue" ? $("storageID").value :
+      "MEMBER:" + $("memberEmail").value;
+    const minimum = wholeOnly(selected.unit) ? 1 : 0.001;
+    return available(selected.id, source) + 1e-9 >= minimum;
+  }
+  function updateControls() {
+    $("fields").disabled = blocked || busy || Boolean(pending) || completed || !options || optionsLoading;
+    ["issueMode", "returnMode"].forEach(id => {
+      $(id).disabled = blocked || busy || Boolean(pending) || completed || optionsLoading;
+    });
+    $("issueMode").className = mode === "issue" ? "" : "secondary";
+    $("returnMode").className = mode === "return" ? "" : "secondary";
+    $("issueMode").setAttribute("aria-pressed", String(mode === "issue"));
+    $("returnMode").setAttribute("aria-pressed", String(mode === "return"));
+    $("storageLabel").textContent = mode === "issue" ? "Issue from" : "Return to";
+    $("saveButton").hidden = completed;
+    $("nextButton").hidden = !completed;
+    $("nextButton").disabled = blocked || busy || optionsLoading;
+    $("saveButton").disabled = blocked || busy || completed ||
+      (!pending && (optionsLoading || !possible() || !hasStockForSelection()));
+    $("saveButton").textContent = busy ? "Saving…" :
+      pending ? (pending.finished ? "Finish" : "Retry " + (mode === "issue" ? "issue" : "return")) :
+      mode === "issue" ? "Issue item" : "Return item";
+    $("refreshButton").disabled = blocked || busy || optionsLoading ||
+      Boolean(pending && !pending.finished);
+  }
+  function editable() {
+    return !blocked && !busy && !pending && !completed && options && !optionsLoading;
+  }
+  function populate(id, entries, placeholder, selected, savedLabel) {
+    $(id).replaceChildren(new Option(placeholder, ""));
+    entries.forEach(entry => $(id).add(new Option(entry.label, entry.id)));
+    if (pending && selected && !entries.some(entry => entry.id === selected)) {
+      $(id).add(new Option(id === "itemID" ? "Previously selected item" : id === "storageID" ? "Previously selected placement" : "Previously selected family member", selected));
+    }
+    $(id).value = selected || "";
+  }
+  function renderChoices() {
+    if (!options) return;
+    const selectedMember = pending ? pending.memberEmail : $("memberEmail").value;
+    const selectedItem = pending ? pending.itemID : $("itemID").value;
+    const selectedStorage = pending ? pending.storageID : $("storageID").value;
+    const members = mode === "issue" ? options.members : options.returnMembers;
+    populate("memberEmail", members, "Select a family member", selectedMember,
+      pending && pending.memberEmail);
+
+    const heldItems = new Set(options.holdings.filter(holding =>
+      holding.memberEmail === $("memberEmail").value).map(holding => holding.itemID));
+    const items = mode === "issue" ? options.items :
+      options.items.filter(entry => heldItems.has(entry.id));
+    populate("itemID", items, "Select an item", selectedItem, pending && pending.itemLabel);
+    const selected = item();
+    const storages = options.storages.map(entry => ({
+      id: entry.id,
+      label: mode === "issue" && selected ? entry.label + " — Available: " +
+        available(selected.id, entry.id) + " " + selected.unit : entry.label
+    }));
+    populate("storageID", storages, "Select a box or location", selectedStorage,
+      pending && pending.storageLabel);
+    updateBalance();
+    updatePhoto();
+  }
+  function updateBalance() {
+    const selected = item();
+    const unit = pending ? pending.unit : selected ? selected.unit : "";
+    $("quantityLabel").textContent = unit ? "Quantity (" + unit + ")" : "Quantity";
+    $("quantity").min = wholeOnly(unit) || !unit ? "1" : "0.001";
+    $("quantity").step = wholeOnly(unit) || !unit ? "1" : "0.001";
+    const selectedItem = $("itemID").value;
+    const selectedStorage = mode === "issue" ? $("storageID").value :
+      "MEMBER:" + $("memberEmail").value;
+    const amount = available(selectedItem, selectedStorage);
+    if (pending) {
+      $("quantity").removeAttribute("max");
+      $("balanceHelp").textContent = pending.finished
+        ? "This movement is confirmed. Tap Finish to clear the saved receipt."
+        : "These saved details are fixed for retry. The current balance may already include this movement.";
+    } else if (!options.storages.length) {
+      $("quantity").removeAttribute("max");
+      $("balanceHelp").textContent = "No boxes or locations are set up. Go to Home > Create Item, Box or Location to add one.";
+    } else if (selectedItem && selectedStorage &&
+        (mode === "issue" || $("memberEmail").value)) {
+      $("quantity").max = String(Math.max(0, amount));
+      $("balanceHelp").textContent = mode === "issue"
+        ? amount <= 0
+          ? "No stock is recorded at this source for the selected item. Choose a source with stock, or use Home > Add Inventory and then tap Refresh balances."
+          : "Available at source: " + amount + " " + unit + "." +
+            (amount + 1e-9 < Number($("quantity").min) ?
+              " This is below the minimum issue quantity. Choose another source or use Home > Add Inventory, then Refresh balances." : "")
+        : "With this family member: " + amount + " " + unit +
+          ". You can return part or all of this quantity.";
+    } else {
+      $("quantity").removeAttribute("max");
+      $("balanceHelp").textContent = mode === "issue"
+        ? selectedItem
+          ? options.storages.some(entry => available(selectedItem, entry.id) + 1e-9 >= Number($("quantity").min))
+            ? "Choose a box or location. Its available quantity is shown in the dropdown."
+            : "No stock is available to issue for this item. Use Home > Add Inventory, then tap Refresh balances."
+          : "Select an item. All boxes and locations are listed in the dropdown."
+        : "Select a family member and item to see the quantity held.";
+    }
+    updateControls();
+  }
+  function renderHoldings() {
+    $("holdingsRows").replaceChildren();
+    $("familyTable").hidden = !options.holdings.length;
+    $("emptyHoldings").hidden = Boolean(options.holdings.length);
+    $("emptyHoldings").textContent = "No items are currently with family members.";
+    for (const holding of options.holdings) {
+      const row = document.createElement("tr");
+      const selected = options.items.find(entry => entry.id === holding.itemID);
+      const values = [holding.memberEmail,
+        selected ? selected.label : "Item description unavailable",
+        holding.quantity + (selected ? " " + selected.unit : "")];
+      values.forEach(value => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+      });
+      $("holdingsRows").appendChild(row);
+    }
+  }
+  function updatePhoto() {
+    const id = pending ? pending.itemID : $("itemID").value;
+    if (id === photoItemID) return;
+    photoItemID = id;
+    const version = ++photoVersion;
+    $("itemPhoto").hidden = true;
+    $("itemPhoto").removeAttribute("src");
+    if (!id) return;
+    try {
+      google.script.run
+        .withSuccessHandler(url => {
+          if (version !== photoVersion || id !== photoItemID) return;
+          if (typeof url === "string" && /^data:image\/(jpeg|png|webp|gif);base64,/.test(url) &&
+              url.length <= 1500000) {
+            $("itemPhoto").src = url;
+            $("itemPhoto").hidden = false;
+          }
+        })
+        .withFailureHandler(() => {})
+        .getFamilyItemThumbnail(id);
+    } catch (_) {}
+  }
+  $("itemPhoto").addEventListener("error", () => { $("itemPhoto").hidden = true; });
+
+  function validOptions(value) {
+    if (!value || !["items", "storages", "members", "returnMembers", "balances", "holdings"]
+        .every(key => Array.isArray(value[key]))) return false;
+    for (const key of ["items", "storages", "members", "returnMembers"]) {
+      if (!value[key].every(entry => entry && typeof entry.id === "string" &&
+          entry.id && typeof entry.label === "string") ||
+          new Set(value[key].map(entry => entry.id)).size !== value[key].length) return false;
+    }
+    return value.items.every(entry => typeof entry.unit === "string") &&
+      value.balances.every(entry => entry && typeof entry.itemID === "string" &&
+        typeof entry.storageID === "string" && Number.isFinite(entry.quantity)) &&
+      value.holdings.every(entry => entry && typeof entry.itemID === "string" &&
+        typeof entry.memberEmail === "string" && Number.isFinite(entry.quantity) &&
+        entry.quantity > 0) &&
+      typeof value.stockWarning === "string";
+  }
+  function loadOptions(preserveMessage = false) {
+    if (blocked || busy || optionsLoading) return;
+    const version = ++optionsVersion;
+    optionsLoading = true;
+    updateControls();
+    if (!preserveMessage) show("Loading balances and family members…");
+    function failed(error) {
+      if (version !== optionsVersion) return;
+      optionsLoading = false;
+      updateControls();
+      const detail = error && error.message ? error.message : String(error);
+      show((completed || (pending && pending.finished) ? receiptMessage + "\n\n" : "") +
+        "Could not refresh balances. " + detail +
+        (pending && !pending.finished ? "\nYou can still retry the saved movement." :
+          "\nTap Refresh balances to try again."), "error");
+    }
+    try {
+      google.script.run
+        .withSuccessHandler(value => {
+          if (version !== optionsVersion) return;
+          try {
+            if (!validOptions(value)) { failed(new Error("Unexpected inventory choices.")); return; }
+            options = value;
+            optionsLoading = false;
+            renderChoices();
+            renderHoldings();
+            updateControls();
+            if (value.stockWarning) {
+              show((receiptMessage ? receiptMessage + "\n\n" : "") + value.stockWarning, "info");
+            } else if (!preserveMessage) {
+              show(pending ? pending.finished ? receiptMessage + "\nTap Finish to clear this saved movement." :
+                "An earlier " + pending.mode + " has no confirmed result.\nTap Retry " +
+                pending.mode + " to check the same movement.\nReference: " + pending.requestID :
+                possible() ? mode === "issue" ? "Select the member, item and source, then enter a quantity." :
+                  "Select the member and item, then choose where to return it." :
+                  mode === "return" ? "No items are currently with family members." :
+                    "No shared accounts, items or storage choices are available.");
+            }
+          } catch (error) { failed(error); }
+        })
+        .withFailureHandler(failed)
+        .getFamilyInventoryOptions();
+    } catch (error) { failed(error); }
+  }
+  function writePending(candidate) {
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(candidate));
+      return true;
+    } catch (error) {
+      busy = false;
+      updateControls();
+      show("Could not save this movement for retry. Nothing new was sent.\n" +
+        "Allow browser storage, then try again.\n" + error.message, "error");
+      return false;
+    }
+  }
+  function finishConfirmed(message) {
+    pending.finished = true;
+    pending.message = message;
+    busy = false;
+    receiptMessage = message + "\n\nReference: " + pending.requestID;
+    try {
+      sessionStorage.removeItem(storageKey);
+    } catch (error) {
+      try { sessionStorage.setItem(storageKey, JSON.stringify(pending)); } catch (_) {}
+      updateControls();
+      show(receiptMessage + "\n\nTap Finish when browser storage is available " +
+        "to clear this saved movement.", "success");
+      return;
+    }
+    pending = null;
+    completed = true;
+    updateControls();
+    show(receiptMessage, "success");
+    loadOptions(true);
+  }
+  function sendPending() {
+    if (pending.finished) { finishConfirmed(pending.message); return; }
+    if (!writePending(pending)) return;
+    optionsVersion++;
+    optionsLoading = false;
+    const version = ++operationVersion;
+    const payload = { requestID: pending.requestID };
+    fieldIDs.forEach(id => { payload[id] = pending[id]; });
+    const method = pending.mode === "issue" ? "submitWebFamilyIssue" : "submitWebFamilyReturn";
+    busy = true;
+    updateControls();
+    show("Saving " + pending.mode + "…");
+    function failed(error) {
+      if (version !== operationVersion || !pending) return;
+      busy = false;
+      updateControls();
+      show("The result could not be confirmed. Retry this same movement.\n" +
+        "Reference: " + pending.requestID + "\n" +
+        (error && error.message ? error.message : String(error)), "error");
+    }
+    try {
+      const runner = google.script.run
+        .withSuccessHandler(result => {
+          if (version !== operationVersion || !pending) return;
+          if (!result || typeof result.accepted !== "boolean" ||
+              result.requestID !== pending.requestID || result.mode !== pending.mode ||
+              typeof result.message !== "string") {
+            failed(new Error("Unexpected movement response.")); return;
+          }
+          busy = false;
+          if (result.accepted) {
+            finishConfirmed(result.message);
+            return;
+          }
+          try { sessionStorage.removeItem(storageKey); }
+          catch (error) {
+            updateControls();
+            show("Rejected: " + result.message + "\nAllow browser storage, " +
+              "then retry this saved movement to clear it.", "error");
+            return;
+          }
+          pending = null;
+          receiptMessage = "";
+          updateControls();
+          show("Rejected: " + result.message, "error");
+          loadOptions(true);
+        })
+        .withFailureHandler(failed);
+      runner[method](payload);
+    } catch (error) { failed(error); }
+  }
+
+  $("familyForm").addEventListener("submit", event => {
+    event.preventDefault();
+    if (blocked || busy || completed) return;
+    try {
+      let candidate = pending;
+      if (!candidate) {
+        if (!options || optionsLoading || !possible() || !hasStockForSelection() ||
+            !$("familyForm").reportValidity()) return;
+        const selected = item();
+        const storage = options.storages.find(entry => entry.id === $("storageID").value);
+        if (!selected || !storage) throw new Error("Refresh the choices before recording this movement.");
+        candidate = {
+          requestID: (mode === "issue" ? "ISSUE-" : "RETURN-") + crypto.randomUUID(),
+          mode: mode, finished: false, message: "",
+          itemLabel: selected.label, storageLabel: storage.label, unit: selected.unit
+        };
+        fieldIDs.forEach(id => { candidate[id] = $(id).value.trim(); });
+      }
+      if (!writePending(candidate)) return;
+      pending = candidate;
+      sendPending();
+    } catch (error) { show("This attempt was not sent. " + error.message, "error"); }
+  });
+  ["issue", "return"].forEach(value => {
+    $(value + "Mode").addEventListener("click", () => {
+      if (!editable()) return;
+      mode = value;
+      receiptMessage = "";
+      $("quantity").value = "1";
+      renderChoices();
+      updateControls();
+      show(possible() ? mode === "issue" ?
+        "Select the member, item and source, then enter a quantity." :
+        "Select the member and item, then choose where to return it." :
+        "No items are currently with family members.");
+    });
+  });
+  ["memberEmail", "itemID"].forEach(id => {
+    $(id).addEventListener("change", () => {
+      if (editable()) renderChoices();
+    });
+  });
+  $("storageID").addEventListener("change", () => {
+    if (editable()) updateBalance();
+  });
+  $("refreshButton").addEventListener("click", () => {
+    if (!pending || pending.finished) loadOptions(Boolean(receiptMessage));
+  });
+  $("nextButton").addEventListener("click", () => {
+    if (!completed || pending || busy || blocked || optionsLoading) return;
+    operationVersion++;
+    completed = false;
+    receiptMessage = "";
+    $("familyForm").reset();
+    photoItemID = "";
+    photoVersion++;
+    $("itemPhoto").hidden = true;
+    $("itemPhoto").removeAttribute("src");
+    updateControls();
+    loadOptions();
+  });
+
+  function readSaved(value) {
+    if (!value || typeof value !== "object" || !["issue", "return"].includes(value.mode) ||
+        !new RegExp("^" + (value.mode === "issue" ? "ISSUE" : "RETURN") + "-" + uuid + "$")
+          .test(value.requestID) ||
+        !fieldIDs.concat(["itemLabel", "storageLabel", "unit"]).every(key =>
+          typeof value[key] === "string") ||
+        !value.itemID || !value.storageID || !value.memberEmail ||
+        !Number.isFinite(Number(value.quantity)) || Number(value.quantity) <= 0 ||
+        typeof value.finished !== "boolean" || typeof value.message !== "string") {
+      throw new Error("The saved movement is incomplete.");
+    }
+    return value;
+  }
+  try {
+    const saved = sessionStorage.getItem(storageKey);
+    if (saved !== null) {
+      pending = readSaved(JSON.parse(saved));
+      mode = pending.mode;
+      fieldIDs.forEach(id => {
+        if (!["memberEmail", "itemID", "storageID"].includes(id)) $(id).value = pending[id];
+      });
+      if (pending.finished) receiptMessage = pending.message + "\n\nReference: " + pending.requestID;
+    }
+  } catch (error) {
+    blocked = true;
+    show("Could not read the saved movement. Ask the app owner to check whether " +
+      "it was recorded before starting another one.\n" + error.message, "error");
+  }
+  updateControls();
+  if (!blocked) loadOptions();
+</script>
+</body>
+</html>

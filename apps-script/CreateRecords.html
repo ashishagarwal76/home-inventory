@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home Inventory – Create Item, Box or Location</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px; background: #f3f7f9;
+      color: #183440; font-family: system-ui, sans-serif;
+    }
+    main {
+      max-width: 520px; margin: 8px auto; padding: 24px;
+      background: white; border: 1px solid #dbe5ea; border-radius: 14px;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.2; }
+    .help { margin: 0 0 24px; color: #536873; font-size: 15px; line-height: 1.5; }
+    .actionList { display: grid; gap: 12px; }
+    .action {
+      display: flex; align-items: center; gap: 14px;
+      min-height: 88px; padding: 16px; border: 1px solid #c6d9e2;
+      border-radius: 10px; background: #f3f9fc; color: #183440;
+      text-decoration: none; overflow-wrap: anywhere;
+    }
+    .action:hover { background: #e8f3f8; border-color: #26718d; }
+    .action:focus-visible, .secondary:focus-visible, .otherActions a:focus-visible {
+      outline: 3px solid #26718d; outline-offset: 3px;
+    }
+    .icon {
+      display: grid; place-items: center; flex: 0 0 40px;
+      width: 40px; height: 40px; border-radius: 10px;
+      background: #165d78; color: white;
+    }
+    .icon svg { width: 23px; height: 23px; }
+    .actionText { flex: 1; min-width: 0; }
+    .actionText strong { display: block; margin-bottom: 4px; font-size: 18px; }
+    .actionText span { display: block; color: #536873; font-size: 14px; line-height: 1.4; }
+    .arrow { color: #26718d; font-size: 22px; flex: 0 0 auto; }
+    .secondary {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      min-height: 60px; margin-top: 24px; padding: 16px;
+      border: 1px solid #b7c9d1; border-radius: 10px;
+      color: #165d78; background: white; font-size: 16px;
+      font-weight: 600; line-height: 1.4; text-decoration: none;
+    }
+    .secondary:hover { background: #edf4f7; }
+    .otherActions {
+      display: flex; flex-wrap: wrap; column-gap: 24px; row-gap: 4px;
+      margin-top: 16px; padding-top: 12px; border-top: 1px solid #e1eaee;
+    }
+    .otherActions a {
+      display: inline-flex; align-items: center; min-height: 44px;
+      color: #165d78; font-size: 14px; text-underline-offset: 3px;
+    }
+    @media (max-width: 380px) {
+      main { padding: 20px 16px; }
+      .action { padding: 14px 12px; gap: 10px; }
+      .actionText strong { font-size: 17px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Create Item, Box or Location</h1>
+  <p class="help">Set up an item, box or storage location.</p>
+  <nav class="actionList" aria-label="Create records">
+    <a class="action" href="<?= appUrl ?>?page=newitem" target="_top">
+      <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5ZM3 8v8l9 5 9-5V8M12 13v8"/></svg></span>
+      <span class="actionText"><strong>New Item</strong><span>Add an item and choose its unit.</span></span>
+      <span class="arrow" aria-hidden="true">›</span>
+    </a>
+    <a class="action" href="<?= appUrl ?>?page=newbox" target="_top">
+      <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16v14H4zM3 3h18v4H3zM9 12h6"/></svg></span>
+      <span class="actionText"><strong>New Box</strong><span>Choose a location for your box. A photo is optional.</span></span>
+      <span class="arrow" aria-hidden="true">›</span>
+    </a>
+    <a class="action" href="<?= appUrl ?>?page=newlocation" target="_top">
+      <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 11-8 11S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg></span>
+      <span class="actionText"><strong>New Location</strong><span>Name a place where you store inventory.</span></span>
+      <span class="arrow" aria-hidden="true">›</span>
+    </a>
+  </nav>
+</main>
+</body>
+</html>

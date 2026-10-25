@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f3f6f8;
+      color: #193244;
+      margin: 0;
+      padding: 24px 16px;
+    }
+    main {
+      max-width: 520px;
+      margin: auto;
+      background: white;
+      padding: 24px;
+      border-radius: 14px;
+    }
+    h1 { margin-top: 0; }
+    label {
+      display: block;
+      margin-top: 18px;
+      font-weight: bold;
+    }
+    select, input, button {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 12px;
+      margin-top: 7px;
+      font: inherit;
+      border: 1px solid #bbc8d0;
+      border-radius: 8px;
+    }
+    button {
+      background: #175c65;
+      color: white;
+      border: none;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+    button:disabled { opacity: .5; cursor: wait; }
+    fieldset { border: 0; padding: 0; margin: 0; }
+    .secondary { background: #e8eef1; color: #193244; }
+    #preview {
+      display: block;
+      max-width: 100%;
+      max-height: 320px;
+      margin: 18px auto;
+      border-radius: 8px;
+      object-fit: contain;
+    }
+    #photoInfo { color: #536873; }
+    #result {
+      margin-top: 20px;
+      padding: 14px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .info { background: #edf3f8; }
+    .success { background: #e2f4e7; color: #195b30; }
+    .error { background: #fce8e6; color: #8c2920; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Upload Photo</h1>
+  <p>Add a photo to an item or box.</p>
+
+  <form id="photoForm">
+    <fieldset id="fields" disabled>
+      <label for="recordType">Photo for</label>
+      <select id="recordType">
+        <option value="Item">Item</option>
+        <option value="Box">Box</option>
+      </select>
+
+      <label for="record">Select item or box</label>
+      <select id="record" required></select>
+      <p id="photoInfo"></p>
+
+      <label for="camera">Take a photo</label>
+      <input id="camera" type="file"
+             accept="image/*" capture="environment">
+
+      <label for="gallery">Or choose an existing photo</label>
+      <input id="gallery" type="file" accept="image/*">
+    </fieldset>
+
+    <div id="cropArea" hidden>
+      <p>Drag the photo to position it, then adjust the zoom.</p>
+
+      <canvas id="cropCanvas" width="600" height="600"
+        style="display:block;width:100%;max-width:360px;
+              aspect-ratio:1;margin:18px auto;border-radius:8px;
+              background:#e8eef1;touch-action:none;cursor:grab;"
+        aria-label="Photo crop preview">
+      </canvas>
+
+      <label for="cropZoom">Zoom</label>
+      <input id="cropZoom" type="range"
+            min="1" max="4" step="0.01" value="1">
+    </div>
+
+    <button id="saveButton" type="submit" disabled>
+      Save photo
+    </button>
+  </form>
+
+  <button id="refreshButton" class="secondary" type="button">
+    Refresh items and boxes
+  </button>
+
+  <button id="nextButton" type="button" hidden>
+    Upload another photo
+  </button>
+
+  <div id="result" class="info" role="status" aria-live="polite">
+    Loading items and boxes…
+  </div>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const storageKey = "homeInventory.pendingPhotoUpload.v1";
+  const canvas = $("cropCanvas");
+  const context = canvas.getContext("2d");
+
+  let catalog = { items: [], boxes: [] };
+  let pending = null;
+  let busy = false;
+  let completed = false;
+
+  let cropImage = null;
+  let baseScale = 1;
+  let zoom = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+  let drag = null;
+
+  function show(message, type = "info") {
+    $("result").textContent = message;
+    $("result").className = type;
+  }
+
+  function records() {
+    return $("recordType").value === "Item"
+      ? catalog.items
+      : catalog.boxes;
+  }
+
+  function updateControls() {
+    const locked = busy || Boolean(pending) || completed;
+    $("fields").disabled = locked;
+    $("cropZoom").disabled = locked || !cropImage;
+    $("refreshButton").disabled = locked;
+
+    $("saveButton").disabled =
+      busy || completed ||
+      (!pending && (!cropImage || !$("record").value));
+
+    canvas.style.cursor = locked ? "default" : "grab";
+  }
+
+  function updateRecordInfo() {
+    const record = records().find(x => x.id === $("record").value);
+
+    $("photoInfo").textContent = record && record.hasPhoto
+      ? "This record already has a photo. Saving will replace its photo link."
+      : "";
+
+    updateControls();
+  }
+
+  function fillRecords() {
+    $("record").replaceChildren(new Option("Select a record", ""));
+    records().forEach(record => {
+      $("record").add(new Option(record.label, record.id));
+    });
+    updateRecordInfo();
+  }
+
+  function loadOptions() {
+    if (busy || pending || completed) return;
+
+    busy = true;
+    updateControls();
+    show("Loading items and boxes…");
+
+    google.script.run
+      .withSuccessHandler(options => {
+        catalog = options;
+        busy = false;
+        fillRecords();
+        show("Select an item or box, then take or choose a photo.");
+      })
+      .withFailureHandler(error => {
+        busy = false;
+        updateControls();
+        $("fields").disabled = true;
+        $("saveButton").disabled = true;
+        show("Could not load records: " + error.message, "error");
+      })
+      .getPhotoUploadOptions();
+  }
+
+  function drawCrop() {
+    if (!cropImage) return;
+
+    const scale = baseScale * zoom;
+    const width = cropImage.naturalWidth * scale;
+    const height = cropImage.naturalHeight * scale;
+
+    // Keep the image covering the entire square.
+    const limitX = Math.max(0, (width - canvas.width) / 2);
+    const limitY = Math.max(0, (height - canvas.height) / 2);
+
+    offsetX = Math.max(-limitX, Math.min(limitX, offsetX));
+    offsetY = Math.max(-limitY, Math.min(limitY, offsetY));
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+
+    context.drawImage(
+      cropImage,
+      (canvas.width - width) / 2 + offsetX,
+      (canvas.height - height) / 2 + offsetY,
+      width,
+      height
+    );
+  }
+
+  async function loadCropImage(url) {
+    const image = new Image();
+
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error(
+        "Your browser could not open this photo. Try JPEG or PNG."
+      ));
+      image.src = url;
+    });
+
+    cropImage = image;
+    baseScale = Math.max(
+      canvas.width / image.naturalWidth,
+      canvas.height / image.naturalHeight
+    );
+
+    zoom = 1;
+    offsetX = 0;
+    offsetY = 0;
+    $("cropZoom").value = "1";
+    $("cropArea").hidden = false;
+    drawCrop();
+  }
+
+  async function preparePhoto(file) {
+    if (!file || busy || pending || completed) return;
+
+    busy = true;
+    cropImage = null;
+    $("cropArea").hidden = true;
+    updateControls();
+    show("Preparing photo…");
+
+    let objectURL;
+
+    try {
+      if (file.size > 30 * 1024 * 1024) {
+        throw new Error("Choose a photo smaller than 30 MB.");
+      }
+
+      objectURL = URL.createObjectURL(file);
+      await loadCropImage(objectURL);
+
+      show(
+        "Drag the photo and adjust Zoom. " +
+        "Only the square shown will be saved."
+      );
+    } catch (error) {
+      show(error.message, "error");
+    } finally {
+      if (objectURL) URL.revokeObjectURL(objectURL);
+      busy = false;
+      updateControls();
+    }
+  }
+
+  $("cropZoom").addEventListener("input", () => {
+    if (!cropImage || busy || pending || completed) return;
+
+    const nextZoom = Number($("cropZoom").value);
+    const ratio = nextZoom / zoom;
+
+    // Keep the same image point at the center while zooming.
+    offsetX *= ratio;
+    offsetY *= ratio;
+    zoom = nextZoom;
+    drawCrop();
+  });
+
+  canvas.addEventListener("pointerdown", event => {
+    if (!cropImage || busy || pending || completed || drag) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+
+    event.preventDefault();
+    canvas.setPointerCapture(event.pointerId);
+    drag = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY
+    };
+    canvas.style.cursor = "grabbing";
+  });
+
+  canvas.addEventListener("pointermove", event => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (busy || pending || completed) return;
+
+    event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+
+    offsetX += (event.clientX - drag.x) * canvas.width / rect.width;
+    offsetY += (event.clientY - drag.y) * canvas.height / rect.height;
+
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    drawCrop();
+  });
+
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach(type => {
+    canvas.addEventListener(type, event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      drag = null;
+      updateControls();
+    });
+  });
+
+  function uncertain(error) {
+    busy = false;
+    $("saveButton").textContent = "Retry same upload";
+    updateControls();
+
+    show(
+      "The upload result could not be confirmed. " +
+      "Use Retry same upload to check or finish this request.\n\n" +
+      "Reference: " + pending.requestID + "\n" +
+      (error.message || String(error)),
+      "error"
+    );
+  }
+
+  $("photoForm").addEventListener("submit", event => {
+    event.preventDefault();
+    if (busy || completed) return;
+
+    if (!pending) {
+      if (!$("photoForm").reportValidity() || !cropImage) return;
+
+      let request;
+
+      try {
+        drawCrop();
+
+        // Export only the visible 600 × 600 square.
+        const dataURL = canvas.toDataURL("image/jpeg", 0.85);
+
+        if (!dataURL.startsWith("data:image/jpeg;base64,") ||
+            dataURL.length > 1300000) {
+          throw new Error("The cropped photo is too large to upload.");
+        }
+
+        request = {
+          requestID: "PHOTO-" + crypto.randomUUID(),
+          recordType: $("recordType").value,
+          recordID: $("record").value,
+          base64: dataURL.split(",")[1]
+        };
+
+        sessionStorage.setItem(storageKey, JSON.stringify(request));
+      } catch (error) {
+        show(
+          "Nothing was uploaded. " + error.message +
+          " Check that browser site storage is allowed.",
+          "error"
+        );
+        return;
+      }
+
+      pending = request;
+    }
+
+    busy = true;
+    drag = null;
+    updateControls();
+    show("Saving cropped photo…");
+
+    google.script.run
+      .withSuccessHandler(result => {
+        if (!result || typeof result.accepted !== "boolean") {
+          uncertain(new Error("Unexpected server response."));
+          return;
+        }
+
+        busy = false;
+
+        try {
+          sessionStorage.removeItem(storageKey);
+        } catch (error) {
+          // A retained request can still be retried safely.
+        }
+
+        pending = null;
+        completed = result.accepted;
+
+        show(
+          (result.accepted ? "" : "Rejected: ") + result.message +
+          (result.requestID ? "\n\nReference: " + result.requestID : ""),
+          result.accepted ? "success" : "error"
+        );
+
+        $("saveButton").hidden = completed;
+        $("nextButton").hidden = !completed;
+        $("saveButton").textContent = "Save photo";
+        updateControls();
+      })
+      .withFailureHandler(uncertain)
+      .uploadInventoryPhoto(pending);
+  });
+
+  $("recordType").addEventListener("change", fillRecords);
+  $("record").addEventListener("change", updateRecordInfo);
+  $("refreshButton").addEventListener("click", loadOptions);
+
+  ["camera", "gallery"].forEach(id => {
+    $(id).addEventListener("change", event => {
+      const file = event.target.files[0];
+      event.target.value = "";
+      preparePhoto(file);
+    });
+  });
+
+  $("nextButton").addEventListener("click", () => {
+    $("photoForm").reset();
+    completed = false;
+    cropImage = null;
+    drag = null;
+    $("cropArea").hidden = true;
+    $("nextButton").hidden = true;
+    $("saveButton").hidden = false;
+    $("saveButton").textContent = "Save photo";
+    loadOptions();
+  });
+
+  async function initializePage() {
+    try {
+      const saved = sessionStorage.getItem(storageKey);
+      if (saved) {
+        pending = JSON.parse(saved);
+
+        if (!pending || !pending.base64 || !pending.requestID) {
+          throw new Error("The saved upload is incomplete.");
+        }
+      }
+    } catch (error) {
+      $("fields").disabled = true;
+      $("saveButton").disabled = true;
+      $("refreshButton").disabled = true;
+      show(
+        "Could not read the saved upload. Check PhotoURL before retrying.",
+        "error"
+      );
+      return;
+    }
+
+    if (!pending) {
+      loadOptions();
+      return;
+    }
+
+    // Preview the exact image already sent; do not recrop a retry.
+    busy = true;
+    updateControls();
+
+    try {
+      await loadCropImage("data:image/jpeg;base64," + pending.base64);
+    } catch (error) {
+      $("cropArea").hidden = true;
+    }
+
+    busy = false;
+    $("saveButton").textContent = "Retry same upload";
+    updateControls();
+
+    show(
+      "An earlier upload has no confirmed result.\n" +
+      pending.recordType + ": " + pending.recordID +
+      "\n\nTap Retry same upload to resolve it."
+    );
+  }
+
+  initializePage();
+</script>
+</body>
+</html>

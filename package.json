@@ -1,0 +1,11 @@
+{
+  "name": "home-inventory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Google Sheets home inventory app with photos and QR labels",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test tests/setup.test.cjs tests/scanner.test.mjs"
+  }
+}

@@ -1,0 +1,157 @@
+<script>
+  (function () {
+    'use strict';
+
+    let generation = 0;
+    let queue = [];
+    let activeRequests = 0;
+    let draining = false;
+    const maximumRequests = 2;
+
+    function isCurrent(job) {
+      return job.generation === generation &&
+        job.parent.isConnected && job.container.isConnected;
+    }
+
+    function showMessage(job, message) {
+      job.image.hidden = true;
+      job.image.style.display = 'none';
+      job.status.hidden = false;
+      job.status.textContent = message;
+    }
+
+    function showThumbnail(job, photo) {
+      if (photo && photo.hasPhoto === false) {
+        showMessage(job, 'No photo added');
+        return;
+      }
+
+      if (!photo || photo.hasPhoto !== true ||
+          typeof photo.dataURL !== 'string' ||
+          !/^data:image\/(?:jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$/.test(photo.dataURL)) {
+        showMessage(job, 'Photo unavailable');
+        return;
+      }
+
+      job.image.onload = function () {
+        if (!isCurrent(job)) return;
+        job.image.hidden = false;
+        job.image.style.display = 'block';
+        job.status.textContent = '';
+        job.status.hidden = true;
+      };
+
+      job.image.onerror = function () {
+        if (!isCurrent(job)) return;
+        showMessage(job, 'Photo unavailable');
+      };
+
+      job.image.src = photo.dataURL;
+    }
+
+    function finishRequest(job, photo, failed) {
+      if (job.settled) return;
+      job.settled = true;
+      activeRequests -= 1;
+
+      try {
+        if (!isCurrent(job)) return;
+        if (failed) {
+          showMessage(job, 'Photo unavailable');
+        } else {
+          showThumbnail(job, photo);
+        }
+      } catch (error) {
+        if (isCurrent(job)) showMessage(job, 'Photo unavailable');
+      } finally {
+        drainQueue();
+      }
+    }
+
+    function drainQueue() {
+      if (draining) return;
+      draining = true;
+
+      try {
+        while (activeRequests < maximumRequests && queue.length) {
+          const job = queue.shift();
+          if (!isCurrent(job)) continue;
+
+          activeRequests += 1;
+
+          try {
+            google.script.run
+              .withSuccessHandler(function (photo) {
+                finishRequest(job, photo, false);
+              })
+              .withFailureHandler(function () {
+                finishRequest(job, null, true);
+              })
+              .getInventoryThumbnail('Item', job.itemID);
+          } catch (error) {
+            finishRequest(job, null, true);
+          }
+        }
+      } finally {
+        draining = false;
+      }
+    }
+
+    window.resetBoxItemPhotos = function () {
+      generation += 1;
+      queue = [];
+      // Existing requests still count toward the limit until they finish.
+    };
+
+    window.addBoxItemPhoto = function (item, parent) {
+      if (!parent || !parent.isConnected) return;
+
+      const container = document.createElement('div');
+      container.style.marginTop = '10px';
+      container.style.marginBottom = '14px';
+
+      const image = document.createElement('img');
+      image.alt = item && typeof item.itemName === 'string'
+        ? 'Photo of ' + item.itemName
+        : 'Inventory item photo';
+      image.hidden = true;
+      image.style.display = 'none';
+      image.style.width = '160px';
+      image.style.maxWidth = '100%';
+      image.style.height = '160px';
+      image.style.objectFit = 'contain';
+
+      const status = document.createElement('small');
+      status.style.display = 'block';
+      status.style.color = '#506577';
+      status.textContent = 'Loading photo…';
+
+      container.appendChild(image);
+      container.appendChild(status);
+      parent.appendChild(container);
+
+      const job = {
+        generation: generation,
+        itemID: item && typeof item.itemID === 'string' ? item.itemID.trim() : '',
+        parent: parent,
+        container: container,
+        image: image,
+        status: status,
+        settled: false
+      };
+
+      if (!job.itemID) {
+        showMessage(job, 'Photo unavailable');
+        return container;
+      }
+
+      if (isCurrent(job)) {
+        queue.push(job);
+        drainQueue();
+      }
+
+      return container;
+    };
+  })();
+</script>
+

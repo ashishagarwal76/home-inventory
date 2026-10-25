@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f3f6f8;
+      color: #193244;
+      margin: 0;
+      padding: 24px 16px;
+    }
+    main {
+      max-width: 520px;
+      margin: auto;
+      background: white;
+      padding: 24px;
+      border-radius: 14px;
+    }
+    h1 { margin-top: 0; }
+    label {
+      display: block;
+      margin-top: 18px;
+      font-weight: bold;
+    }
+    select, input, textarea, button {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 12px;
+      margin-top: 7px;
+      font: inherit;
+      border: 1px solid #bbc8d0;
+      border-radius: 8px;
+    }
+    button {
+      background: #175c65;
+      color: white;
+      border: none;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+    button:disabled { opacity: .5; cursor: wait; }
+    fieldset { border: 0; padding: 0; margin: 0; }
+    .secondary { background: #e8eef1; color: #193244; }
+    #result {
+      margin-top: 20px;
+      padding: 14px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .info { background: #edf3f8; }
+    .success { background: #e2f4e7; color: #195b30; }
+    .error { background: #fce8e6; color: #8c2920; }
+    #unit { font-size: 14px; color: #536873; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Move Inventory</h1>
+  <p>Choose an item, quantity, source, and destination.</p>
+
+  <form id="inventoryForm">
+    <fieldset id="fields" disabled>
+      <label for="item">Item</label>
+      <select id="item" required></select>
+      <img id="itemThumbnail" alt="Selected item photo" hidden
+        style="display:block;width:120px;height:120px;
+                object-fit:contain;margin-top:12px;border-radius:8px;">
+
+    <p id="itemPhotoStatus" style="font-size:14px;color:#536873;"
+      role="status"></p>
+
+      <label for="quantity">Quantity</label>
+      <input id="quantity" type="number"
+             min="1" step="1" value="1" required>
+      <p id="unit"></p>
+
+      <label for="source">Source</label>
+      <select id="source" required></select>
+      <img id="sourceBoxThumbnail" alt="Source box photo" hidden
+        style="display:block;width:120px;height:120px;
+                object-fit:contain;margin-top:12px;border-radius:8px;">
+
+    <p id="sourceBoxPhotoStatus" style="font-size:14px;color:#536873;"
+      role="status"></p>
+
+      <label for="destination">Destination</label>
+      <select id="destination" required></select>
+      <img id="destinationBoxThumbnail" alt="Destination box photo" hidden
+        style="display:block;width:120px;height:120px;
+                object-fit:contain;margin-top:12px;border-radius:8px;">
+
+    <p id="destinationBoxPhotoStatus"
+      style="font-size:14px;color:#536873;" role="status"></p>
+
+      <label for="notes">Notes — optional</label>
+      <textarea id="notes" rows="3" maxlength="2000"></textarea>
+    </fieldset>
+
+    <button id="submitButton" type="submit" disabled>
+      Move inventory
+    </button>
+  </form>
+
+  <button id="refreshButton" class="secondary" type="button">
+    Refresh choices
+  </button>
+
+  <button id="nextButton" type="button" hidden>
+    Move another item
+  </button>
+
+  <div id="result" class="info" role="status" aria-live="polite">
+    Loading items and sources…
+  </div>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const storageKey = "homeInventory.pendingWebMove.v1";
+
+  let catalog = { items: [], sources: [] };
+  let pending = null;
+  let busy = false;
+
+  function show(message, type = "info") {
+    $("result").textContent = message;
+    $("result").className = type;
+  }
+
+  function fill(select, choices, placeholder) {
+    select.replaceChildren(new Option(placeholder, ""));
+    choices.forEach(choice => {
+      select.add(new Option(choice.label, choice.id));
+    });
+  }
+const thumbnailVersions = {};
+
+function loadMoveThumbnail(selectID, recordType, imageID, statusID) {
+  const version = (thumbnailVersions[imageID] || 0) + 1;
+  thumbnailVersions[imageID] = version;
+
+  const recordID = $(selectID).value;
+  const image = $(imageID);
+  const status = $(statusID);
+
+  image.onload = null;
+  image.onerror = null;
+  image.hidden = true;
+  image.removeAttribute("src");
+  status.textContent = "";
+
+  if (!recordID) return;
+
+  // Direct locations do not have box photos.
+  if (recordType === "Box" && !recordID.startsWith("BOX-")) return;
+
+  status.textContent = "Loading photo…";
+
+  google.script.run
+    .withSuccessHandler(result => {
+      if (thumbnailVersions[imageID] !== version) return;
+
+      if (!result.hasPhoto) {
+        status.textContent = "No photo added yet.";
+        return;
+      }
+
+      image.onload = () => {
+        if (thumbnailVersions[imageID] !== version) return;
+        image.hidden = false;
+        status.textContent = "";
+      };
+
+      image.onerror = () => {
+        if (thumbnailVersions[imageID] !== version) return;
+        image.hidden = true;
+        status.textContent = "Photo could not be displayed.";
+      };
+
+      image.src = result.dataURL;
+    })
+    .withFailureHandler(error => {
+      if (thumbnailVersions[imageID] !== version) return;
+      status.textContent = "Photo unavailable: " + error.message;
+    })
+    .getInventoryThumbnail(recordType, recordID);
+}
+
+function loadMoveItemPhoto() {
+  loadMoveThumbnail(
+    "item", "Item", "itemThumbnail", "itemPhotoStatus"
+  );
+}
+
+function loadMoveSourcePhoto() {
+  loadMoveThumbnail(
+    "source", "Box", "sourceBoxThumbnail", "sourceBoxPhotoStatus"
+  );
+}
+
+function loadMoveDestinationPhoto() {
+  loadMoveThumbnail(
+    "destination", "Box",
+    "destinationBoxThumbnail", "destinationBoxPhotoStatus"
+  );
+}
+function updateUnit() {
+  const item = catalog.items.find(x => x.id === $("item").value);
+  const unit = item ? item.unit.trim().toLowerCase() : "";
+
+  const wholeNumberUnits = [
+    "each", "pack", "packs"
+  ];
+
+  const wholeOnly = wholeNumberUnits.includes(unit);
+  const quantity = $("quantity");
+
+  quantity.min = wholeOnly ? "1" : "0.001";
+  quantity.step = wholeOnly ? "1" : "0.001";
+
+  // Start at 1 whenever the selected item changes.
+  quantity.value = "1";
+
+  $("unit").textContent = item
+    ? "Unit: " + item.unit +
+      (wholeOnly ? " — whole numbers only" : " — up to 3 decimal places")
+    : "";
+  loadMoveItemPhoto();
+}
+
+  function loadChoices() {
+    if (busy || pending) return;
+
+    busy = true;
+    $("fields").disabled = true;
+    $("submitButton").disabled = true;
+    $("refreshButton").disabled = true;
+    show("Loading items and sources…");
+
+    google.script.run
+      .withSuccessHandler(options => {
+        busy = false;
+        catalog = options;
+
+        fill($("item"), options.items, "Select an item");
+        fill($("source"), options.sources, "Select storage");
+        fill($("destination"), options.sources, "Select destination");
+        loadMoveSourcePhoto();
+        loadMoveDestinationPhoto();
+        updateUnit();
+
+        const ready = options.items.length > 0 &&
+                      options.sources.length > 0;
+
+        $("fields").disabled = !ready;
+        $("submitButton").disabled = !ready;
+        $("refreshButton").disabled = false;
+
+        show(ready
+          ? "Ready."
+          : "Create at least one item and storage location first.");
+      })
+      .withFailureHandler(error => {
+        busy = false;
+        $("refreshButton").disabled = false;
+        show("Could not load choices: " + error.message, "error");
+      })
+      .getMoveInventoryOptions();
+  }
+
+  function uncertain(error) {
+    busy = false;
+    $("submitButton").disabled = false;
+    $("submitButton").textContent = "Retry same request";
+
+    show(
+      "The result could not be confirmed. Click Retry same request " +
+      "to check or complete it without adding a duplicate.\n\n" +
+      "Request: " + pending.requestID + "\n" +
+      (error.message || String(error)),
+      "error"
+    );
+  }
+
+  $("inventoryForm").addEventListener("submit", event => {
+    event.preventDefault();
+    if (busy) return;
+
+    if (!pending) {
+      if (!$("inventoryForm").reportValidity()) return;
+
+      const quantity = Number($("quantity").value);
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        show("Enter a quantity greater than zero.", "error");
+        return;
+      }
+
+      const request = {
+        requestID: "WEB-" + crypto.randomUUID(),
+        itemID: $("item").value,
+        quantity,
+        source: $("source").value,
+        destination: $("destination").value,
+        notes: $("notes").value.trim()
+      };
+
+      // Save the request before sending, so a reload can recover it.
+      try {
+        sessionStorage.setItem(storageKey, JSON.stringify(request));
+      } catch (error) {
+        show(
+          "Browser storage is unavailable. Allow site storage and " +
+          "reload before submitting. Nothing was sent.",
+          "error"
+        );
+        return;
+      }
+
+      pending = request;
+    }
+
+    busy = true;
+    $("fields").disabled = true;
+    $("refreshButton").disabled = true;
+    $("submitButton").disabled = true;
+    show("Processing your movement…");
+
+    google.script.run
+      .withSuccessHandler(result => {
+        if (!result || typeof result.accepted !== "boolean") {
+          uncertain(new Error("Unexpected server response."));
+          return;
+        }
+
+        busy = false;
+        try {
+          sessionStorage.removeItem(storageKey);
+        } catch (error) {
+          // Retaining the old request still permits a safe retry.
+        }
+
+        pending = null;
+
+        show(
+          (result.accepted ? "" : "Rejected: ") + result.message +
+          (result.requestID ? "\n\nReference: " + result.requestID : ""),
+          result.accepted ? "success" : "error"
+        );
+
+        if (result.accepted) {
+          $("submitButton").hidden = true;
+          $("nextButton").hidden = false;
+        } else {
+          $("fields").disabled = false;
+          $("submitButton").disabled = false;
+          $("submitButton").textContent = "Move inventory";
+          $("refreshButton").disabled = false;
+        }
+      })
+      .withFailureHandler(uncertain)
+      .submitWebMoveInventory(pending);
+  });
+
+  $("item").addEventListener("change", updateUnit);
+  $("source").addEventListener("change", loadMoveSourcePhoto);
+  $("destination").addEventListener("change", loadMoveDestinationPhoto);
+
+  $("refreshButton").addEventListener("click", loadChoices);
+
+  $("nextButton").addEventListener("click", () => {
+    $("inventoryForm").reset();
+    $("nextButton").hidden = true;
+    $("submitButton").hidden = false;
+    $("submitButton").textContent = "Move inventory";
+    loadChoices();
+  });
+
+  // Recover an unresolved submission after reloading this tab.
+  try {
+    const saved = sessionStorage.getItem(storageKey);
+    if (saved) pending = JSON.parse(saved);
+  } catch (error) {
+    show("Could not read the saved request. Check Transactions before retrying.",
+         "error");
+    $("refreshButton").disabled = true;
+    throw error;
+  }
+
+  if (pending) {
+    $("refreshButton").disabled = true;
+    $("submitButton").disabled = false;
+    $("submitButton").textContent = "Retry same request";
+
+    show(
+      "An earlier submission has no confirmed result.\n" +
+      "Item: " + pending.itemID +
+      "\nQuantity: " + pending.quantity +
+      "\nsource: " + pending.source +
+      "\nDestination: " + pending.destination +
+      "\n\nClick Retry same request to resolve it."
+    );
+  } else {
+    loadChoices();
+  }
+</script>
+</body>
+</html>
