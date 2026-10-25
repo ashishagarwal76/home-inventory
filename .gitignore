@@ -1,0 +1,14 @@
+# Local project links, Google sign-in files, and local tooling
+.clasp.json
+.clasprc.json
+**/.clasp.json
+**/.clasprc.json
+*-auth.json
+client_secret*.json
+credentials*.json
+.env
+.env.*
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
